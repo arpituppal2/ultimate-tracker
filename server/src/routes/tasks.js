@@ -16,6 +16,14 @@ const { syncTaskOutcomeLedger, cents } = require('../lib/ledgerSummary');
 
 const prisma = new PrismaClient();
 const BATCH_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
+function parsePagination(query) {
+  const take = Math.min(parseInt(query.take, 10) || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+  const skip = parseInt(query.skip, 10) || 0;
+  return { take, skip };
+}
 
 function baseWhereFromQuery(query = {}) {
   const { category, weekNumber, status, quarterId, date, dateFrom, dateTo } = query;
@@ -112,12 +120,18 @@ function ledgerStatus(status) {
 router.get('/', authenticate, async (req, res) => {
   try {
     const where = baseWhereFromQuery(req.query);
-    const tasks = await prisma.task.findMany({
-      where,
-      select: buildTaskSelect(),
-      orderBy: [{ dueDate: 'asc' }, { title: 'asc' }],
-    });
-    res.json(tasks.map(normalizeTask));
+    const { take, skip } = parsePagination(req.query);
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        select: buildTaskSelect(),
+        orderBy: [{ dueDate: 'asc' }, { title: 'asc' }],
+        take,
+        skip,
+      }),
+      prisma.task.count({ where }),
+    ]);
+    res.json({ tasks: tasks.map(normalizeTask), total, take, skip });
   } catch (error) {
     console.error('Task list error:', error);
     res.status(500).json({ error: error.message });
@@ -131,22 +145,33 @@ router.get('/today', authenticate, async (req, res) => {
     const todayStart = startOfDay(now);
     const todayEnd = endOfDay(now);
     const { week, quarter } = await getCurrentWeekAndQuarter(now);
+    // Only load overdue from last 14 days to cap result size
+    const overdueFloor = new Date(todayStart.getTime() - 14 * 24 * 60 * 60 * 1000);
     const where = {
       ...buildCategoryFilter(req.query.category),
-      dueDate: { lte: todayEnd },
+      dueDate: { gte: overdueFloor, lte: todayEnd },
       status: { in: ACTIVE_TASK_STATUSES },
     };
+    const { take, skip } = parsePagination(req.query);
 
-    const tasks = await prisma.task.findMany({
-      where,
-      select: buildTaskSelect(),
-      orderBy: [{ category: 'asc' }, { dueDate: 'asc' }, { title: 'asc' }],
-    });
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        select: buildTaskSelect(),
+        orderBy: [{ category: 'asc' }, { dueDate: 'asc' }, { title: 'asc' }],
+        take,
+        skip,
+      }),
+      prisma.task.count({ where }),
+    ]);
 
     res.json({
       week,
       quarter,
       focusLine: week?.focus || quarter?.description || quarter?.focus || '',
+      total,
+      take,
+      skip,
       tasks: tasks.map(task => ({
         ...normalizeTask(task),
         isOverdue: Boolean(task.dueDate && new Date(task.dueDate) < todayStart),
@@ -165,6 +190,7 @@ router.get('/week', authenticate, async (req, res) => {
     const weekStart = startOfWeekMonday(now);
     const weekEnd = endOfWeekSunday(now);
     const { week, quarter } = await getCurrentWeekAndQuarter(now);
+    const { take, skip } = parsePagination(req.query);
 
     const where = {
       ...buildCategoryFilter(req.query.category),
@@ -172,17 +198,25 @@ router.get('/week', authenticate, async (req, res) => {
       status: { in: ACTIVE_TASK_STATUSES },
     };
 
-    const tasks = await prisma.task.findMany({
-      where,
-      select: buildTaskSelect(),
-      orderBy: [{ dueDate: 'asc' }, { category: 'asc' }, { title: 'asc' }],
-    });
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        select: buildTaskSelect(),
+        orderBy: [{ dueDate: 'asc' }, { category: 'asc' }, { title: 'asc' }],
+        take,
+        skip,
+      }),
+      prisma.task.count({ where }),
+    ]);
 
     res.json({
       week,
       quarter,
       focusLine: week?.focus || quarter?.description || quarter?.focus || '',
       range: { start: weekStart, end: weekEnd },
+      total,
+      take,
+      skip,
       tasks: tasks.map(normalizeTask),
     });
   } catch (error) {
