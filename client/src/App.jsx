@@ -5,8 +5,6 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Today from './pages/Today';
 import Week from './pages/Week';
-import Quarter from './pages/Quarter';
-import MasterPlan from './pages/MasterPlan';
 import Analytics from './pages/Analytics';
 import Notes from './pages/Notes';
 import Trackers from './pages/Trackers';
@@ -38,17 +36,17 @@ function AppRoutes() {
           <Route path="/dashboard" element={<Navigate to="/today" replace />} />
           <Route path="/today"     element={<Today />} />
           <Route path="/week"      element={<Week />} />
-          <Route path="/quarter"   element={<Quarter />} />
-          <Route path="/master-plan" element={<MasterPlan />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/notes"     element={<Notes />} />
           <Route path="/trackers"  element={<Trackers />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/feedback"  element={<Navigate to="/notes" replace />} />
-          <Route path="/inventory" element={<Navigate to="/master-plan" replace />} />
           <Route path="/balance"   element={<Navigate to="/analytics" replace />} />
           <Route path="/calendar"  element={<Navigate to="/week" replace />} />
           <Route path="/colleges"  element={<Navigate to="/trackers" replace />} />
+          <Route path="/quarter"   element={<Navigate to="/today" replace />} />
+          <Route path="/master-plan" element={<Navigate to="/today" replace />} />
+          <Route path="/inventory" element={<Navigate to="/today" replace />} />
           <Route
             path="/admin"
             element={isAdmin ? <AdminPanel /> : <Navigate to="/today" replace />}
