@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  password    String
+  role        String   @default("student") // student | parent | admin
+  name        String?
+  isActive    Boolean  @default(true)
+  disabled    Boolean  @default(false)
+  pageAccess  Json?    @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  submissions   TaskSubmission[]
+  habitLogs     HabitLog[]
+  weeklyHabits  WeeklyHabit[]
+  ledgerEntries LedgerEntry[]
+  streaks       Streak[]
+  feedbacks     AdminFeedback[]
+  taskRequests  TaskRequest[]
+}
+
+model Quarter {
+  id        String   @id // e.g. Q2_2026
+  label     String
+  startDate DateTime
+  endDate   DateTime
+  weekStart Int
+  weekEnd   Int
+  grade     String
+  focus     String
+  description String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  weeks PlanWeek[]
+  tasks Task[]
+}
+
+model PlanWeek {
+  id              String   @id // e.g. W001
+  weekNumber      Int
+  label           String   @default("")
+  startDate       DateTime
+  endDate         DateTime
+  quarterId       String
+  focus           String?
+  amcTopic        String   @default("")
+  khanLevel       String   @default("")
+  apSubject       String   @default("")
+  creativeProject String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  quarter Quarter  @relation(fields: [quarterId], references: [id])
+  tasks   Task[]
+}
+
+model Task {
+  id               String   @id @default(cuid())
+  title            String
+  category         String
+  templateType     String   @default("simple")
+  dueDate          DateTime?
+  requiresProof    Boolean  @default(false)
+  status           String   @default("pending")
+  rewardCents      Int      @default(2)
+  penaltyLateCents Int      @default(5)
+  penaltyMissCents Int      @default(10)
+  quarterId        String?
+  weekNum          Int?
+  weekId           String?
+
+  templatePrefill  Json?    @default("{}")
+  description      String?
+  resourceUrl      String?
+
+  // Saved in-progress data (student saves progress before submitting)
+  savedData        Json?    @default("{}")
+
+  // Audit trail: array of { at, field, from, to, adminId } — admin-only visible
+  adminChangelog   Json?    @default("[]")
+
+  quarter       Quarter?         @relation(fields: [quarterId], references: [id])
+  week          PlanWeek?        @relation(fields: [weekId], references: [id])
+  submissions   TaskSubmission[]
+  ledgerEntries LedgerEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DeletedBatch {
+  id          String   @id @default(cuid())
+  label       String
+  tasks       Json
+  deletedAt   DateTime @default(now())
+  restoredAt  DateTime?
+  expiresAt   DateTime
+}
+
+model TaskSubmission {
+  id               String    @id @default(cuid())
+  taskId           String
+  userId           String
+  status           String    @default("pending_review")
+  driveLinks       String[]  @default([])
+  uploadUrls       String[]  @default([])
+  templateData     Json      @default("{}")
+  notes            String?
+  timeSpentSeconds Int?
+  submittedAt      DateTime  @default(now())
+  reviewedAt       DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  task      Task            @relation(fields: [taskId], references: [id])
+  user      User            @relation(fields: [userId], references: [id])
+  feedbacks AdminFeedback[]
+}
+
+model AdminFeedback {
+  id           String   @id @default(cuid())
+  submissionId String
+  reviewerId   String
+  note         String
+  action       String
+  createdAt    DateTime @default(now())
+
+  submission TaskSubmission @relation(fields: [submissionId], references: [id])
+  reviewer   User           @relation(fields: [reviewerId], references: [id])
+}
+
+model HabitLog {
+  id          String    @id @default(cuid())
+  userId      String
+  date        DateTime
+  habitKey    String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date, habitKey])
+}
+
+model WeeklyHabit {
+  id        String   @id @default(cuid())
+  userId    String
+  weekId    String
+  step      Int
+  category  String   @default("academic")
+  title     String
+  proofLink String?
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Int
+  reason    String
+  taskId    String?
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id])
+  task Task? @relation(fields: [taskId], references: [id])
+}
+
+model Streak {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  current     Int      @default(0)
+  longest     Int      @default(0)
+  lastUpdated DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model TaskRequest {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  category    String
+  description String?
+  status      String   @default("pending")
+  adminNote   String?
+  createdAt   DateTime @default(now())
+  reviewedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// ─── College Tracker ────────────────────────────────────────────────────────────────
+
+model College {
+  id          String   @id @default(cuid())
+  name        String
+  shortName   String
+  status      String   @default("exploring")
+  notes       String?
+  explorationTaskId String?
+
+  tasks       CollegeTask[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CollegeTask {
+  id          String   @id @default(cuid())
+  collegeId   String
+  title       String
+  type        String   @default("general")
+  status      String   @default("pending")
+  dueDate     String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  college     College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+}

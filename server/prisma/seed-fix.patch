@@ -1,0 +1,2 @@
+The real fix is in validateTaskShape — weekNum is not stored on normalized tasks.
+See commit message for details.
