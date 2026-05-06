@@ -2,6 +2,6 @@
   builder = "railpack"
 
 [deploy]
-  startCommand = "npx prisma migrate deploy && node src/index.js"
+  startCommand = "npx prisma db push && node src/index.js"
   restartPolicyType = "on_failure"
   restartPolicyMaxRetries = 3
