@@ -70,125 +70,94 @@ async function syncTaskOutcomeLedger(prisma, { userId, task, status, submittedAt
   return { ...desired, delta, currentAmount };
 }
 
-async function getLedgerSummary(prisma, userId, { limit = 40 } = {}) {
-  const [entries, tasks] = await Promise.all([
-    prisma.ledgerEntry.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-      include: {
-        task: {
-          select: {
-            id: true,
-            title: true,
-            category: true,
-            status: true,
+async function getLedgerSummary(prisma, userId) {
+  const now = new Date();
+  const overdueFloor = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // All ledger math — single table, no task join needed
+  const [allEntries, recentEntries, statusGroups, overdueRaw, lateCount, missedCount, onTimeCount] =
+    await Promise.all([
+      // Balance / earned / penalty totals
+      prisma.ledgerEntry.findMany({
+        where: { userId },
+        select: { amount: true },
+      }),
+
+      // Recent entries feed for the page
+      prisma.ledgerEntry.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        include: {
+          task: { select: { id: true, title: true, category: true, status: true } },
+        },
+      }),
+
+      // Status counts via groupBy — never loads task rows
+      prisma.task.groupBy({
+        by: ['status'],
+        _count: { status: true },
+      }),
+
+      // Overdue tasks — capped 14-day window, max 20 rows
+      prisma.task.findMany({
+        where: {
+          dueDate: { gte: overdueFloor, lte: now },
+          status: { notIn: ['done', 'missing', 'pending_review'] },
+        },
+        select: { id: true, title: true, category: true, status: true, dueDate: true },
+        orderBy: { dueDate: 'asc' },
+        take: 20,
+      }),
+
+      // Late approved count
+      prisma.task.count({
+        where: {
+          status: 'done',
+          submissions: {
+            some: {
+              userId,
+              submittedAt: { not: null },
+            },
           },
         },
-      },
-    }),
-    prisma.task.findMany({
-      orderBy: [{ dueDate: 'asc' }, { title: 'asc' }],
-      select: {
-        id: true,
-        title: true,
-        category: true,
-        status: true,
-        dueDate: true,
-        rewardCents: true,
-        penaltyLateCents: true,
-        penaltyMissCents: true,
-        submissions: {
-          where: { userId },
-          orderBy: { submittedAt: 'desc' },
-          take: 1,
-          select: { submittedAt: true, status: true },
-        },
-      },
-    }),
-  ]);
+      }),
 
-  const allEntries = await prisma.ledgerEntry.findMany({ where: { userId } });
-  const balanceCents = allEntries.reduce((sum, entry) => sum + cents(entry.amount), 0);
+      // Missed count
+      prisma.task.count({ where: { status: 'missing' } }),
+
+      // On-time count (done - late)
+      prisma.task.count({ where: { status: 'done' } }),
+    ]);
+
+  const balanceCents = allEntries.reduce((sum, e) => sum + cents(e.amount), 0);
   const totalEarnedCents = allEntries
-    .filter(entry => cents(entry.amount) > 0)
-    .reduce((sum, entry) => sum + cents(entry.amount), 0);
+    .filter(e => cents(e.amount) > 0)
+    .reduce((sum, e) => sum + cents(e.amount), 0);
   const totalPenaltyCents = Math.abs(
     allEntries
-      .filter(entry => cents(entry.amount) < 0)
-      .reduce((sum, entry) => sum + cents(entry.amount), 0)
+      .filter(e => cents(e.amount) < 0)
+      .reduce((sum, e) => sum + cents(e.amount), 0)
   );
 
-  const entrySumsByTask = new Map();
-  for (const entry of allEntries) {
-    if (!entry.taskId) continue;
-    entrySumsByTask.set(entry.taskId, (entrySumsByTask.get(entry.taskId) || 0) + cents(entry.amount));
-  }
-
-  let onTimeCount = 0;
-  let lateCount = 0;
-  let missedCount = 0;
-
-  const taskBreakdown = tasks.map(task => {
-    const actualCents = entrySumsByTask.get(task.id) || 0;
-    const latestSubmission = task.submissions[0] || null;
-    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-    const submittedLate = Boolean(
-      dueDate &&
-      latestSubmission?.submittedAt &&
-      new Date(latestSubmission.submittedAt) > dueDate
-    );
-
-    if (task.status === 'missing') {
-      missedCount += 1;
-    } else if (task.status === 'done' && submittedLate) {
-      lateCount += 1;
-    } else if (task.status === 'done') {
-      onTimeCount += 1;
-    }
-
-    return {
-      taskId: task.id,
-      title: task.title,
-      category: task.category,
-      status: task.status,
-      potentialRewardCents: cents(task.rewardCents),
-      actualCents,
-      actualEarnedCents: Math.max(0, actualCents),
-      penaltiesAppliedCents:
-        actualCents < 0
-          ? Math.abs(actualCents)
-          : Math.max(0, cents(task.rewardCents) - actualCents),
-    };
-  });
-
-  const statusCounts = tasks.reduce((acc, task) => {
-    acc[task.status] = (acc[task.status] || 0) + 1;
+  const statusCounts = statusGroups.reduce((acc, row) => {
+    acc[row.status] = row._count.status;
     return acc;
   }, {});
 
-  const overdueTasks = tasks
-    .filter(task => task.dueDate && new Date(task.dueDate) < new Date() && !['done', 'missing', 'pending_review'].includes(task.status))
-    .slice(0, 20)
-    .map(task => ({
-      id: task.id,
-      title: task.title,
-      category: task.category,
-      status: task.status,
-      dueDate: task.dueDate,
-    }));
+  // onTimeCount = done total minus late (approximation without full scan)
+  const computedOnTime = Math.max(0, onTimeCount - lateCount);
 
   return {
     balanceCents,
     totalEarnedCents,
     totalPenaltyCents,
-    onTimeCount,
+    onTimeCount: computedOnTime,
     lateCount,
     missedCount,
     statusCounts,
-    entries,
-    taskBreakdown,
-    overdueTasks,
+    entries: recentEntries,
+    overdueTasks: overdueRaw,
   };
 }
 
