@@ -67,10 +67,10 @@ const Sidebar = ({ dark, toggleDark }) => {
 
   const NAV_LINKS = [
     { to: '/dashboard',  icon: CheckSquare,   label: 'Dashboard',  badge: overdueCnt > 0 ? overdueCnt : 0 },
-    { to: '/week',       icon: Calendar,      label: 'Reviews',    badge: 0 },
+    { to: '/week',       icon: Calendar,      label: 'All Tasks',  badge: 0 },
     { to: '/completed',  icon: CheckCircle,   label: 'Completed',  badge: 0 },
     { to: '/analytics',  icon: DollarSign,    label: 'Analytics',  badge: 0 },
-    { to: '/notes',      icon: MessageSquare, label: 'Notes',      badge: pendingRevCnt > 0 && (user?.role === 'admin' || user?.role === 'parent') ? pendingRevCnt : 0 },
+    { to: '/notes',      icon: MessageSquare, label: 'Reviews',    badge: pendingRevCnt > 0 && (user?.role === 'admin' || user?.role === 'parent') ? pendingRevCnt : 0 },
     { to: '/trackers',   icon: BookOpen,      label: 'Trackers',   badge: 0 },
   ];
 
