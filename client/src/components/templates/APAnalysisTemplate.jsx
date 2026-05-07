@@ -32,7 +32,7 @@ function Field({ label, required, hint, source, children, style }) {
       {label && <Label required={required}>{label}</Label>}
       {hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', lineHeight: 1.55, marginBottom: 'var(--space-2)', borderLeft: '2px solid var(--color-border)', paddingLeft: 'var(--space-2)' }}>{hint}</div>}
       {children}
-      {source && <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: 6, fontStyle: 'italic' }}>📌 Source: {source}</div>}
+      {source && <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: 6, fontStyle: 'italic' }}>Source: {source}</div>}
     </div>
   );
 }

@@ -1,84 +1,95 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../utils/api';
-import { EmptyState, PageHeader, SectionTitle, TaskRow } from '../components/TaskSurface';
+import { EmptyState, PageHeader, TaskRow } from '../components/TaskSurface';
 import { getTaskCategoryLabel } from '../utils/taskPresentation';
 
-function weekdayLabel(dateLike) {
-  return new Date(dateLike).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  });
-}
+const PAGE_SIZE = 200;
 
-function weekQuarterLabel(week, quarter) {
-  const parts = [];
-  if (week?.weekNumber) parts.push(`Week ${week.weekNumber}`);
-  if (quarter?.label) parts.push(quarter.label);
-  return parts.join(' · ');
+function displayCategoryLabel(task) {
+  const templateType = String(task?.templateType || '').toLowerCase();
+  const source = String(task?.templatePrefill?.source || '').toLowerCase();
+  const title = String(task?.title || '').toLowerCase();
+  const assignment = String(task?.templatePrefill?.assignment || '').toLowerCase();
+
+  if (templateType.includes('khan') || source.includes('khan') || title.includes('khan') || assignment.includes('khan')) {
+    return 'Khan Academy';
+  }
+  if (title.includes('ap exploration')) {
+    return 'AP Exploration';
+  }
+
+  return getTaskCategoryLabel(task);
 }
 
 export default function Week() {
-  const [payload, setPayload] = useState({ tasks: [], week: null, quarter: null, focusLine: '' });
-  const [groupMode, setGroupMode] = useState('day');
+  const [payload, setPayload] = useState({ tasks: [], total: 0, take: PAGE_SIZE, skip: 0 });
+  const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setLoading(true);
-    api.get('/tasks/week')
-      .then(response => setPayload(response.data || { tasks: [] }))
-      .catch(err => setError(err.response?.data?.error || 'Failed to load weekly tasks.'))
-      .finally(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const params = new URLSearchParams();
+        params.set('take', String(PAGE_SIZE));
+        params.set('skip', String(pageIndex * PAGE_SIZE));
+        if (query.trim()) params.set('q', query.trim());
+        if (statusFilter !== 'all') params.set('status', statusFilter);
+        if (categoryFilter !== 'all') params.set('category', categoryFilter);
+
+        const response = await api.get(`/tasks?${params.toString()}`);
+        if (!cancelled) {
+          setPayload(response.data || { tasks: [], total: 0, take: PAGE_SIZE, skip: 0 });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.response?.data?.error || 'Failed to load tasks.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [query, statusFilter, categoryFilter, pageIndex]);
 
   const categoryOptions = useMemo(() => {
-    const labels = new Set((payload.tasks || []).map(task => getTaskCategoryLabel(task)));
-    return ['all', ...Array.from(labels).sort((a, b) => a.localeCompare(b))];
+    const options = new Map();
+    for (const task of payload.tasks || []) {
+      if (!task.category) continue;
+      options.set(task.category, displayCategoryLabel(task));
+    }
+
+    return [
+      { value: 'all', label: 'All Categories' },
+      ...Array.from(options.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
   }, [payload.tasks]);
 
-  const filteredTasks = useMemo(() => {
-    return (payload.tasks || []).filter(task => {
-      if (statusFilter === 'overdue' && !task.isOverdue) return false;
-      if (statusFilter === 'on_track' && task.isOverdue) return false;
-      if (categoryFilter !== 'all' && getTaskCategoryLabel(task) !== categoryFilter) return false;
-      return true;
-    });
-  }, [payload.tasks, statusFilter, categoryFilter]);
-
-  const grouped = useMemo(() => {
-    const keyForTask = task => groupMode === 'day' ? weekdayLabel(task.dueDate) : getTaskCategoryLabel(task);
-    const map = new Map();
-    filteredTasks.forEach(task => {
-      const key = keyForTask(task);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(task);
-    });
-
-    return Array.from(map.entries())
-      .map(([label, tasks]) => ({
-        label,
-        tasks: [...tasks].sort((a, b) => {
-          const dueA = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
-          const dueB = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
-          if (dueA !== dueB) return dueA - dueB;
-          return String(a.title).localeCompare(String(b.title));
-        }),
-      }))
-      .sort((a, b) => a.tasks[0]?.dueDate && b.tasks[0]?.dueDate
-        ? new Date(a.tasks[0].dueDate) - new Date(b.tasks[0].dueDate)
-        : a.label.localeCompare(b.label));
-  }, [filteredTasks, groupMode]);
+  const total = payload.total || 0;
+  const pageStart = total === 0 ? 0 : pageIndex * PAGE_SIZE + 1;
+  const pageEnd = Math.min(total, (pageIndex + 1) * PAGE_SIZE);
+  const hasPrevious = pageIndex > 0;
+  const hasNext = pageEnd < total;
 
   return (
     <div style={{ paddingTop: 'var(--space-6)' }}>
       <PageHeader
-        eyebrow="Week"
-        title="This Week"
-        meta={weekQuarterLabel(payload.week, payload.quarter)}
-        submeta={payload.focusLine}
+        eyebrow="All Tasks"
+        title="All Tasks"
+        meta={total > 0 ? `${pageStart}-${pageEnd} of ${total}` : '0'}
       />
 
       {error && (
@@ -87,45 +98,41 @@ export default function Week() {
         </div>
       )}
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginBottom: 'var(--space-5)' }}>
-        {[
-          { key: 'all', label: 'All' },
-          { key: 'overdue', label: 'Overdue' },
-          { key: 'on_track', label: 'On Track' },
-        ].map(option => (
-          <button
-            key={option.key}
-            className={['btn-tab', statusFilter === option.key ? 'btn-tab--active' : ''].join(' ')}
-            onClick={() => setStatusFilter(option.key)}
-          >
-            {option.label}
-          </button>
-        ))}
-
-        <div style={{ width: 1, background: 'var(--color-border)', marginInline: '0.15rem' }} />
-
-        {[
-          { key: 'day', label: 'By Day' },
-          { key: 'category', label: 'By Category' },
-        ].map(option => (
-          <button
-            key={option.key}
-            className={['btn-tab', groupMode === option.key ? 'btn-tab--active' : ''].join(' ')}
-            onClick={() => setGroupMode(option.key)}
-          >
-            {option.label}
-          </button>
-        ))}
-
+      <div style={{ display: 'grid', gap: 'var(--space-3)', gridTemplateColumns: 'minmax(220px, 1.8fr) repeat(2, minmax(180px, 0.8fr))', marginBottom: 'var(--space-5)' }}>
+        <input
+          value={query}
+          onChange={event => {
+            setPageIndex(0);
+            setQuery(event.target.value);
+          }}
+          className="input-base"
+          placeholder="Search title, description, category"
+        />
+        <select
+          value={statusFilter}
+          onChange={event => {
+            setPageIndex(0);
+            setStatusFilter(event.target.value);
+          }}
+          className="input-base"
+        >
+          {['all', 'pending', 'in_progress', 'pending_review', 'done', 'needs_revision', 'late', 'missing'].map(option => (
+            <option key={option} value={option}>
+              {option === 'all' ? 'All Statuses' : option}
+            </option>
+          ))}
+        </select>
         <select
           value={categoryFilter}
-          onChange={event => setCategoryFilter(event.target.value)}
+          onChange={event => {
+            setPageIndex(0);
+            setCategoryFilter(event.target.value);
+          }}
           className="input-base"
-          style={{ maxWidth: 220, marginLeft: 'auto' }}
         >
           {categoryOptions.map(option => (
-            <option key={option} value={option}>
-              {option === 'all' ? 'All Categories' : option}
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -139,20 +146,27 @@ export default function Week() {
             </div>
           ))}
         </div>
-      ) : grouped.length === 0 ? (
+      ) : (payload.tasks || []).length === 0 ? (
         <EmptyState text="No tasks match the current filters." />
       ) : (
-        <div style={{ display: 'grid', gap: 'var(--space-6)' }}>
-          {grouped.map(group => (
-            <section key={group.label}>
-              <SectionTitle title={group.label} count={group.tasks.length} />
-              <div style={{ display: 'grid', gap: '1px' }}>
-                {group.tasks.map(task => (
-                  <TaskRow key={task.id} task={task} showWeekday={groupMode === 'category'} />
-                ))}
-              </div>
-            </section>
+        <div style={{ display: 'grid', gap: '1px' }}>
+          {(payload.tasks || []).map(task => (
+            <TaskRow key={task.id} task={{ ...task, categoryLabel: displayCategoryLabel(task) }} showWeekday />
           ))}
+        </div>
+      )}
+
+      {!loading && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-5)' }}>
+          <button className="btn-outline btn-sm" onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))} disabled={!hasPrevious}>
+            Previous
+          </button>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 700 }}>
+            {pageStart}-{pageEnd} of {total}
+          </div>
+          <button className="btn-outline btn-sm" onClick={() => setPageIndex(prev => prev + 1)} disabled={!hasNext}>
+            Next
+          </button>
         </div>
       )}
     </div>

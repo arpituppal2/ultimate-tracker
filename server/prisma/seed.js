@@ -26,15 +26,20 @@
 
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
+const {
+  generateAllApTasks,
+} = require('./apTaskGenerator');
 const prisma = new PrismaClient();
 
 // ───────────────────────────────────────────────────────────────────────────────
 // GLOBAL PROGRAM START
-// Week 1 starts Monday, May 4, 2026.
+// Seeded work begins Wednesday, May 6, 2026.
+// Instructional weeks still close on Sunday.
 // All week math in this file is 1-indexed.
 // ───────────────────────────────────────────────────────────────────────────────
 
 const PLAN_START = new Date('2026-05-04T00:00:00.000Z');
+const FIRST_TASK_DATE = new Date('2026-05-06T08:00:00.000Z');
 const MAX_WEEK = 247; // through 12th grade completion / AP wind-down / college transition
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -49,6 +54,12 @@ const CATEGORY = {
   AIME: 'aime',
   LANGUAGE: 'language',
   AP: 'ap',
+  SAT: 'sat',
+  SCIENCE: 'science',
+  ENGLISH: 'english',
+  CAREER: 'career',
+  COMPUTER_SCIENCE: 'computer_science',
+  OTHER: 'other',
   RECURRING: 'recurring',
   COLLEGE: 'college',
   APPLICATION: 'application',
@@ -69,6 +80,10 @@ const TEMPLATE = {
   MOCK_TEST: 'mock_test',
   LANGUAGE_PRACTICE: 'language_practice',
   COLLEGE_RESEARCH: 'college_research',
+  CAREER_REPORT: 'career_report',
+  AP_CURRICULUM_ANALYSIS: 'ap_curriculum_analysis',
+  READING_LOG: 'reading_log',
+  OTHER: 'other',
   APPLICATION: 'application',
   INTERVIEW: 'interview',
   ACTIVITY_LOG: 'activity_log',
@@ -202,7 +217,7 @@ const QUARTERS = [
   {
     id: 'Q22026',
     label: 'Q2 2026',
-    startDate: '2026-05-04',
+    startDate: '2026-05-06',
     endDate: '2026-08-02',
     weekStart: 1,
     weekEnd: 13,
@@ -8928,6 +8943,1790 @@ function generateWeeklyExecutionPackets() {
   return tasks;
 }
 
+function searchUrlFor(query) {
+  return `https://www.khanacademy.org/search?page_search_query=${encodeURIComponent(query)}`;
+}
+
+function weekNumberForDate(dateLike) {
+  const date = dateLike instanceof Date ? cloneDate(dateLike) : new Date(dateLike);
+  const utcDay = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const startDay = Date.UTC(
+    PLAN_START.getUTCFullYear(),
+    PLAN_START.getUTCMonth(),
+    PLAN_START.getUTCDate()
+  );
+  const diffDays = Math.floor((utcDay - startDay) / 86400000);
+  return clamp(Math.floor(diffDays / 7) + 1, 1, MAX_WEEK);
+}
+
+function directiveWeekTask({
+  id,
+  title,
+  category,
+  templateType,
+  weekNum,
+  assignment,
+  instructions,
+  checklist = [],
+  payload = {},
+  requiresProof = true,
+  resourceUrl = null,
+}) {
+  const task = weekTask({
+    id,
+    title,
+    category,
+    templateType,
+    weekNum,
+    requiresProof,
+    templatePrefill: {
+      proofUploadUrl: PROOF_DRIVE_URL,
+      assignment,
+      instructions,
+      checklist,
+      ...payload,
+    },
+  });
+
+  return {
+    ...task,
+    resourceUrl,
+  };
+}
+
+function buildApTopicSeedTasks() {
+  return generateAllApTasks({ tasksPerDay: 2 }).map((task) => {
+    const weekNum = weekNumberForDate(task.dueDate);
+    const isReviewTask = Boolean(task.meta?.reviewTask);
+    const canonicalTitle = task.meta?.canonicalTitle || task.title;
+
+    return {
+      id: taskId(
+        'ap_topic_seed',
+        task.apName,
+        isoDate(task.dueDate),
+        `slot_${task.meta?.slotOfDay || 1}`,
+        isReviewTask ? canonicalTitle : `${task.unit}_${task.topicNumber}`
+      ),
+      title: task.title,
+      category: CATEGORY.AP,
+      templateType: isReviewTask ? TEMPLATE.REVIEW : TEMPLATE.LESSON,
+      dueDate: cloneDate(task.dueDate),
+      weekNum,
+      weekId: weekId(weekNum),
+      quarterId: quarterForWeek(weekNum),
+      requiresProof: true,
+      resourceUrl: searchUrlFor(`${task.apName} ${canonicalTitle}`),
+      templatePrefill: {
+        source: task.source,
+        apName: task.apName,
+        unit: task.unit,
+        topicNumber: task.topicNumber,
+        canonicalTitle,
+        slotOfDay: task.meta?.slotOfDay || 1,
+        tasksPerDay: task.meta?.tasksPerDay || 2,
+        categoryKey: 'ap',
+        proofDocRequired: true,
+        reviewTask: isReviewTask,
+        assignment: isReviewTask
+          ? `Complete ${task.title} exactly as titled.`
+          : `Complete ${task.apName} ${task.title} exactly as titled.`,
+        instructions: isReviewTask
+          ? 'Run the exact spiral review set in the title. Upload proof first, then notes or written corrections.'
+          : 'Use the exact [unit.topic] title in the task name so the source is easy to find. Upload proof first.',
+      },
+    };
+  });
+}
+
+function scheduledItemsForWeek(items, weekNum, startWeek, endWeek, count) {
+  if (weekNum < startWeek || weekNum > endWeek || items.length === 0 || count <= 0) return [];
+
+  const weekOffset = weekNum - startWeek;
+  const totalWeeks = endWeek - startWeek + 1;
+  const totalSlots = totalWeeks * count;
+  const out = [];
+
+  for (let slotOffset = 0; slotOffset < count; slotOffset += 1) {
+    const slot = weekOffset * count + slotOffset;
+    const idx = Math.min(items.length - 1, Math.floor((slot * items.length) / totalSlots));
+    out.push(items[idx]);
+  }
+
+  return out;
+}
+
+const AP_EXPLORATION_COURSES = [
+  'AP African American Studies',
+  'AP Art History',
+  'AP Biology',
+  'AP Calculus AB',
+  'AP Calculus BC',
+  'AP Chemistry',
+  'AP Chinese Language and Culture',
+  'AP Comparative Government and Politics',
+  'AP Computer Science A',
+  'AP Computer Science Principles',
+  'AP English Language and Composition',
+  'AP English Literature and Composition',
+  'AP Environmental Science',
+  'AP European History',
+  'AP French Language and Culture',
+  'AP German Language and Culture',
+  'AP Human Geography',
+  'AP Italian Language and Culture',
+  'AP Japanese Language and Culture',
+  'AP Latin',
+  'AP Macroeconomics',
+  'AP Microeconomics',
+  'AP Music Theory',
+  'AP Physics 1',
+  'AP Physics 2',
+  'AP Physics C: Mechanics',
+  'AP Physics C: Electricity and Magnetism',
+  'AP Precalculus',
+  'AP Psychology',
+  'AP Research',
+  'AP Seminar',
+  'AP Spanish Language and Culture',
+  'AP Spanish Literature and Culture',
+  'AP Statistics',
+  'AP Studio Art: 2-D Design',
+  'AP Studio Art: 3-D Design',
+  'AP Studio Art: Drawing',
+  'AP United States Government and Politics',
+  'AP United States History',
+  'AP World History: Modern',
+  'AP Biology Deep Dive',
+  'AP Chemistry Deep Dive',
+  'AP Environmental Science Deep Dive',
+  'AP Computer Science Principles Deep Dive',
+  'AP Calculus BC Deep Dive',
+  'AP Statistics Deep Dive',
+  'AP Physics 1 Deep Dive',
+  'AP Physics 2 Deep Dive',
+  'AP Psychology Deep Dive',
+  'AP Human Geography Deep Dive',
+  'AP English Language Deep Dive',
+  'AP English Literature Deep Dive',
+];
+
+const COLLEGE_REPORT_SCHOOLS = [
+  'Harvard',
+  'Stanford',
+  'MIT',
+  'Princeton',
+  'Yale',
+  'UPenn',
+  'Columbia',
+  'Duke',
+  'Johns Hopkins',
+  'UC Berkeley',
+  'UCLA',
+  'CalTech',
+  'UChicago',
+  'Carnegie Mellon',
+  'Cornell',
+  'Brown',
+  'GaTech',
+  'UMich',
+  'Dartmouth',
+  'Northwestern',
+  'UC San Diego',
+  'UC Santa Barbara',
+  'UC Irvine',
+  'UC Davis',
+  'UC Santa Cruz',
+  'UC Riverside',
+  'UC Merced',
+  'Rice',
+  'Vanderbilt',
+  'USC',
+  'NYU',
+  'WashU',
+  'UNC Chapel Hill',
+  'UT Austin',
+  'University of Washington',
+  'Boston University',
+  'University of Wisconsin Madison',
+];
+
+const CAREER_STARTER_KIT = [
+  'Software Engineer',
+  'Data Scientist',
+  'Biomedical Engineer',
+  'Physician (MD)',
+  'Lawyer (JD)',
+  'Financial Analyst',
+  'Aerospace Engineer',
+  'Environmental Scientist',
+  'Actuary',
+  'Epidemiologist',
+  'Product Manager',
+  'UX/UI Designer',
+  'Mechanical Engineer',
+  'Civil Engineer',
+  'Pharmacist',
+  'Genetic Counselor',
+  'Economist',
+  'Urban Planner',
+  'Neuroscientist',
+  'Psychiatrist',
+  'Machine Learning Engineer',
+  'Robotics Engineer',
+  'Patent Attorney',
+  'Research Scientist',
+  'Dentist',
+  'Veterinarian',
+  'Electrical Engineer',
+  'Chemical Engineer',
+  'Nuclear Engineer',
+  'Materials Engineer',
+  'Environmental Engineer',
+  'Petroleum Engineer',
+  'Marine Engineer',
+  'Nanotechnology Engineer',
+  'Systems Engineer',
+  'Network Engineer',
+  'Cybersecurity Analyst',
+  'Cloud Architect',
+  'DevOps Engineer',
+  'Full Stack Developer',
+  'Embedded Systems Engineer',
+  'Surgeon',
+  'Radiologist',
+  'Cardiologist',
+  'Oncologist',
+  'Dermatologist',
+  'Pediatrician',
+  'Anesthesiologist',
+  'Physical Therapist',
+  'Occupational Therapist',
+  'Nurse Practitioner',
+  'Physician Assistant',
+  'Astrophysicist',
+  'Particle Physicist',
+  'Marine Biologist',
+  'Geologist',
+  'Climate Scientist',
+  'Ecologist',
+  'Biochemist',
+  'Microbiologist',
+  'Immunologist',
+  'Virologist',
+  'Synthetic Biologist',
+  'Computational Biologist',
+  'Organic Chemist',
+  'Cognitive Scientist',
+  'Behavioral Economist',
+  'Architect',
+  'Industrial Designer',
+  'Film Director',
+  'Video Game Designer',
+  'Robotics Researcher',
+  'AI Researcher',
+  'Quantum Computing Researcher',
+  'University Professor',
+  'School Principal',
+  'Curriculum Designer',
+  'Social Worker',
+  'Nonprofit Executive Director',
+  'Pilot (Commercial)',
+  'Astronaut',
+  'Air Traffic Controller',
+  'Forensic Scientist',
+  'Sports Medicine Physician',
+  'Orthopedic Surgeon',
+  'Operations Researcher',
+];
+
+const AMC_FOUNDATION_TOPICS = [
+  { domain: 'Geometry', topic: 'Pythagorean theorem and converse' },
+  { domain: 'Geometry', topic: 'Triangle area formulas' },
+  { domain: 'Geometry', topic: 'Heron’s formula' },
+  { domain: 'Geometry', topic: 'Similarity (AA, SAS, SSS) and ratio arguments' },
+  { domain: 'Geometry', topic: 'Congruence (SSS, SAS, ASA, AAS, HL)' },
+  { domain: 'Geometry', topic: 'sin, cos, tan definitions and identities' },
+  { domain: 'Geometry', topic: 'Law of Sines' },
+  { domain: 'Geometry', topic: 'Law of Cosines' },
+  { domain: 'Geometry', topic: 'Angle bisector theorem' },
+  { domain: 'Geometry', topic: 'Medians, centroid, and median length formulas' },
+  { domain: 'Geometry', topic: 'Ceva’s Theorem' },
+  { domain: 'Geometry', topic: 'Menelaus’s Theorem' },
+  { domain: 'Geometry', topic: 'Stewart’s Theorem' },
+  { domain: 'Geometry', topic: 'Inscribed angle theorem and central angle' },
+  { domain: 'Geometry', topic: 'Power of a Point' },
+  { domain: 'Geometry', topic: 'Cyclic quadrilaterals and opposite-angle supplements' },
+  { domain: 'Geometry', topic: 'Ptolemy’s Theorem' },
+  { domain: 'Geometry', topic: 'Circle chord, arc, and segment length relations' },
+  { domain: 'Geometry', topic: 'Tangent and secant properties in circles' },
+  { domain: 'Geometry', topic: 'Inradius and circumradius formulas' },
+  { domain: 'Geometry', topic: '3D geometry basics' },
+  { domain: 'Geometry', topic: 'Coordinate geometry: distance, midpoint, slope, line equations' },
+  { domain: 'Geometry', topic: 'Area via coordinates: shoelace formula' },
+  { domain: 'Geometry', topic: 'Pick’s Theorem' },
+  { domain: 'Combinatorics and Probability', topic: 'Fundamental counting principle' },
+  { domain: 'Combinatorics and Probability', topic: 'Permutations and combinations' },
+  { domain: 'Combinatorics and Probability', topic: 'Pascal’s triangle and identity' },
+  { domain: 'Combinatorics and Probability', topic: 'Binomial coefficient identities' },
+  { domain: 'Combinatorics and Probability', topic: 'Stars and bars' },
+  { domain: 'Combinatorics and Probability', topic: 'Pigeonhole principle' },
+  { domain: 'Combinatorics and Probability', topic: 'Basic probability and conditional probability intuition' },
+  { domain: 'Combinatorics and Probability', topic: 'Linearity of expectation' },
+  { domain: 'Combinatorics and Probability', topic: 'Recursion' },
+  { domain: 'Combinatorics and Probability', topic: 'Inclusion-exclusion' },
+  { domain: 'Combinatorics and Probability', topic: 'Generating-function intuition' },
+  { domain: 'Combinatorics and Probability', topic: 'Burnside’s lemma' },
+  { domain: 'Combinatorics and Probability', topic: 'Double counting and combinatorial identities' },
+  { domain: 'Combinatorics and Probability', topic: 'Bijections and mapping between sets' },
+  { domain: 'Combinatorics and Probability', topic: 'Graph-theoretic counting ideas' },
+  { domain: 'Combinatorics and Probability', topic: 'Invariants and monovariants' },
+  { domain: 'Combinatorics and Probability', topic: 'Extremal principle' },
+  { domain: 'Combinatorics and Probability', topic: 'Complementary counting' },
+  { domain: 'Combinatorics and Probability', topic: 'Constructive counting and casework organization' },
+  { domain: 'Number Theory', topic: 'Divisibility rules and basic divisibility logic' },
+  { domain: 'Number Theory', topic: 'Prime factorization and uniqueness' },
+  { domain: 'Number Theory', topic: 'GCD and LCM definitions and relation' },
+  { domain: 'Number Theory', topic: 'Euclidean algorithm and extended form' },
+  { domain: 'Number Theory', topic: 'Modular arithmetic and linear congruences' },
+  { domain: 'Number Theory', topic: 'Chinese Remainder Theorem' },
+  { domain: 'Number Theory', topic: 'Fermat’s Little Theorem' },
+  { domain: 'Number Theory', topic: 'Euler’s theorem and Euler’s totient function' },
+  { domain: 'Number Theory', topic: 'Wilson’s Theorem' },
+  { domain: 'Number Theory', topic: 'Chicken McNugget theorem' },
+  { domain: 'Number Theory', topic: 'Legendre’s formula' },
+  { domain: 'Number Theory', topic: 'Divisor-count and divisor-sum functions' },
+  { domain: 'Number Theory', topic: 'Order of an element modulo n' },
+  { domain: 'Number Theory', topic: 'Units-digit and remainder cycles' },
+  { domain: 'Number Theory', topic: 'Parity and parity arguments' },
+  { domain: 'Number Theory', topic: 'Modular invariants in combinatorics' },
+  { domain: 'Number Theory', topic: 'LTE-style reasoning' },
+  { domain: 'Number Theory', topic: 'Basic valuation and p-adic intuition' },
+  { domain: 'Algebra', topic: 'Difference of squares, cubes, and completing the square' },
+  { domain: 'Algebra', topic: 'Quadratic formula and discriminant analysis' },
+  { domain: 'Algebra', topic: 'Vieta’s formulas' },
+  { domain: 'Algebra', topic: 'Polynomial remainder theorem and factor theorem' },
+  { domain: 'Algebra', topic: 'Rational root theorem ideas' },
+  { domain: 'Algebra', topic: 'Systems of equations: substitution, elimination, symmetry' },
+  { domain: 'Algebra', topic: 'Arithmetic and geometric sequences and telescoping' },
+  { domain: 'Algebra', topic: 'Binomial theorem and Pascal’s identity' },
+  { domain: 'Algebra', topic: 'Logarithm laws and exponent rules' },
+  { domain: 'Algebra', topic: 'Inequalities: AM-GM and Cauchy-Schwarz' },
+  { domain: 'Algebra', topic: 'Jensen and rearrangement intuition' },
+  { domain: 'Algebra', topic: 'Convexity and tangent-line arguments' },
+  { domain: 'Algebra', topic: 'De Moivre’s Theorem and roots of unity' },
+  { domain: 'Algebra', topic: 'Substitution and reparameterization tricks' },
+  { domain: 'Algebra', topic: 'Symmetric and antisymmetric expressions' },
+  { domain: 'Algebra', topic: 'Completing the square in multiple variables' },
+  { domain: 'Algebra', topic: 'Manipulation speed and seeing structure' },
+  { domain: 'Advanced', topic: 'Mass points' },
+  { domain: 'Advanced', topic: 'Functional equations basics' },
+  { domain: 'Advanced', topic: 'Bounding arguments' },
+  { domain: 'Advanced', topic: 'Casework cleanup and solution writing' },
+];
+
+const KHAN_PHASE_PLANS = [
+  {
+    startWeek: 1,
+    endWeek: 3,
+    items: [
+      'Early math review — Counting',
+      'Early math review — Addition and subtraction intro',
+      'Early math review — Place value (tens and hundreds)',
+      'Early math review — Addition and subtraction within 20',
+      'Early math review — Addition and subtraction within 100',
+      'Early math review — Addition and subtraction within 1000',
+      'Early math review — Measurement and data',
+      'Early math review — Geometry',
+      'Kindergarten math — Counting and place value',
+      'Kindergarten math — Addition and subtraction',
+      'Kindergarten math — Measurement and geometry',
+      '1st grade math — Place value',
+      '1st grade math — Addition and subtraction',
+      '1st grade math — Measurement, data, and geometry',
+      '2nd grade math — Add and subtract within 20',
+      '2nd grade math — Place value',
+      '2nd grade math — Add and subtract within 100',
+      '2nd grade math — Add and subtract within 1,000',
+      '2nd grade math — Money and time',
+      '2nd grade math — Measurement',
+      '2nd grade math — Data',
+      '2nd grade math — Geometry',
+      '3rd grade math — Intro to multiplication',
+      '3rd grade math — 1-digit multiplication',
+      '3rd grade math — Intro to division',
+      '3rd grade math — Understand fractions',
+      '3rd grade math — Equivalent fractions and comparing fractions',
+      '3rd grade math — More with multiplication and division',
+      '3rd grade math — Quadrilaterals',
+      '3rd grade math — Area',
+      '3rd grade math — Perimeter',
+      '4th grade math — Place value',
+      '4th grade math — Multiply by 1-digit numbers',
+      '4th grade math — Multiply by 2-digit numbers',
+      '4th grade math — Division',
+      '4th grade math — Factors, multiples and patterns',
+      '4th grade math — Add and subtract fractions',
+      '4th grade math — Multiply fractions',
+      '4th grade math — Understand decimals',
+      '4th grade math — Plane figures',
+      '4th grade math — Measuring angles',
+      '4th grade math — Area and perimeter',
+    ],
+  },
+  {
+    startWeek: 4,
+    endWeek: 13,
+    items: [
+      '5th grade math — Decimal place value',
+      '5th grade math — Add decimals',
+      '5th grade math — Subtract decimals',
+      '5th grade math — Add and subtract fractions',
+      '5th grade math — Multi-digit multiplication and division',
+      '5th grade math — Multiply fractions',
+      '5th grade math — Divide fractions',
+      '5th grade math — Multiply decimals',
+      '5th grade math — Divide decimals',
+      '5th grade math — Powers of ten',
+      '5th grade math — Volume',
+      '5th grade math — Coordinate plane',
+      '5th grade math — Algebraic thinking',
+      '5th grade math — Converting units of measure',
+      '5th grade math — Line plots',
+      '5th grade math — Properties of shapes',
+      '6th grade math — Ratios',
+      '6th grade math — Arithmetic with rational numbers',
+      '6th grade math — Rates and percentages',
+      '6th grade math — Exponents and order of operations',
+      '6th grade math — Negative numbers',
+      '6th grade math — Variables & expressions',
+      '6th grade math — Equations & inequalities',
+      '6th grade math — Plane figures',
+      '6th grade math — Coordinate plane',
+      '6th grade math — 3D figures',
+      '6th grade math — Data and statistics',
+    ],
+  },
+  {
+    startWeek: 14,
+    endWeek: 26,
+    items: [
+      '7th grade math — Proportional relationships',
+      '7th grade math — Rates and percentages',
+      '7th grade math — Integers: addition and subtraction',
+      '7th grade math — Rational numbers: addition and subtraction',
+      '7th grade math — Negative numbers: multiplication and division',
+      '7th grade math — Expressions, equations, & inequalities',
+      '7th grade math — Statistics and probability',
+      '7th grade math — Scale copies',
+      '7th grade math — Geometry',
+      '8th grade math — Numbers and operations',
+      '8th grade math — Solving equations with one unknown',
+      '8th grade math — Linear equations and functions',
+      '8th grade math — Systems of equations',
+      '8th grade math — Geometry',
+      '8th grade math — Geometric transformations',
+      '8th grade math — Data and modeling',
+      'Arithmetic — Place value through 1,000,000',
+      'Arithmetic — Multiply and divide multi-digit numbers',
+      'Arithmetic — Divide fractions',
+      'Arithmetic — Multiply and divide decimals',
+      'Arithmetic — Exponents and powers of ten',
+      'Arithmetic — Add and subtract negative numbers',
+      'Arithmetic — Multiply and divide negative numbers',
+      'Pre-algebra — Factors and multiples',
+      'Pre-algebra — Ratios and rates',
+      'Pre-algebra — Percentages',
+      'Pre-algebra — Variables & expressions',
+      'Pre-algebra — Equations & inequalities introduction',
+      'Pre-algebra — Proportional relationships',
+      'Pre-algebra — One-step and two-step equations & inequalities',
+      'Pre-algebra — Multi-step equations',
+      'Pre-algebra — Two-variable equations',
+      'Pre-algebra — Functions and linear models',
+      'Pre-algebra — Systems of equations',
+    ],
+  },
+  {
+    startWeek: 27,
+    endWeek: 39,
+    items: [
+      'Algebra 1 — Algebra foundations',
+      'Algebra 1 — Solving equations & inequalities',
+      'Algebra 1 — Working with units',
+      'Algebra 1 — Linear equations & graphs',
+      'Algebra 1 — Forms of linear equations',
+      'Algebra 1 — Systems of equations',
+      'Algebra 1 — Inequalities (systems & graphs)',
+      'Algebra 1 — Functions',
+      'Algebra 1 — Sequences',
+      'Algebra 1 — Absolute value & piecewise functions',
+      'Algebra 1 — Exponents & radicals',
+      'Algebra 1 — Exponential growth & decay',
+      'Algebra 1 — Quadratics: Multiplying & factoring',
+      'Algebra 1 — Quadratic functions & equations',
+      'Algebra 1 — Irrational numbers',
+      'Algebra 1 — Creativity in algebra',
+      'High school geometry — Performing transformations',
+      'High school geometry — Transformation properties and proofs',
+      'High school geometry — Congruence',
+      'High school geometry — Similarity',
+      'High school geometry — Right triangles & trigonometry',
+      'High school geometry — Analytic geometry',
+      'High school geometry — Conic sections',
+      'High school geometry — Circles',
+      'High school geometry — Solid geometry',
+      'Geometry (all content) — Lines',
+      'Geometry (all content) — Angles',
+      'Geometry (all content) — Shapes',
+      'Geometry (all content) — Triangles',
+      'Geometry (all content) — Quadrilaterals',
+      'Geometry (all content) — Coordinate plane',
+      'Geometry (all content) — Area and perimeter',
+      'Geometry (all content) — Volume and surface area',
+      'Geometry (all content) — Pythagorean theorem',
+      'Geometry (all content) — Transformations',
+      'Geometry (all content) — Congruence',
+      'Geometry (all content) — Similarity',
+      'Geometry (all content) — Trigonometry',
+      'Geometry (all content) — Circles',
+      'Geometry (all content) — Analytic geometry',
+      'Geometry (all content) — Geometric constructions',
+      'Geometry (all content) — Miscellaneous',
+    ],
+  },
+  {
+    startWeek: 40,
+    endWeek: 52,
+    items: [
+      'Algebra 2 — Polynomial arithmetic',
+      'Algebra 2 — Complex numbers',
+      'Algebra 2 — Polynomial factorization',
+      'Algebra 2 — Polynomial division',
+      'Algebra 2 — Polynomial graphs',
+      'Algebra 2 — Rational exponents and radicals',
+      'Algebra 2 — Exponential models',
+      'Algebra 2 — Logarithms',
+      'Algebra 2 — Transformations of functions',
+      'Algebra 2 — Equations',
+      'Algebra 2 — Trigonometry',
+      'Algebra 2 — Modeling',
+      'Integrated math 1 — Linear equations & graphs',
+      'Integrated math 1 — Systems of equations',
+      'Integrated math 1 — Functions',
+      'Integrated math 1 — Sequences',
+      'Integrated math 1 — Exponents & radicals',
+      'Integrated math 1 — Performing transformations',
+      'Integrated math 1 — Congruence',
+      'Integrated math 2 — Absolute value & piecewise functions',
+      'Integrated math 2 — Quadratic functions & equations',
+      'Integrated math 2 — Similarity',
+      'Integrated math 2 — Right triangles & trigonometry',
+      'Integrated math 2 — Circles',
+      'Integrated math 2 — Probability',
+      'Integrated math 3 — Polynomial arithmetic',
+      'Integrated math 3 — Polynomial factorization',
+      'Integrated math 3 — Logarithms',
+      'Integrated math 3 — Trigonometry',
+      'Integrated math 3 — Modeling',
+      'Algebra (all content) — Introduction to algebra',
+      'Algebra (all content) — Linear equations, functions, & graphs',
+      'Algebra (all content) — Quadratic equations & functions',
+      'Algebra (all content) — Polynomial expressions, equations, & functions',
+      'Algebra (all content) — Exponential & logarithmic functions',
+      'Algebra (all content) — Radical equations & functions',
+      'Algebra (all content) — Rational expressions, equations, & functions',
+      'Algebra (all content) — Trigonometric functions',
+      'Algebra (all content) — Complex numbers',
+      'Algebra (all content) — Conic sections',
+      'Algebra (all content) — Series & induction',
+      'Algebra (all content) — Vectors',
+      'Algebra (all content) — Matrices',
+    ],
+  },
+  {
+    startWeek: 53,
+    endWeek: 65,
+    items: [
+      'Right triangles & trigonometry — Right triangles & trigonometry',
+      'Right triangles & trigonometry — Trigonometric functions',
+      'Right triangles & trigonometry — Non-right triangles & trigonometry',
+      'Right triangles & trigonometry — Trigonometric equations and identities',
+      'Precalculus — Composite and inverse functions',
+      'Precalculus — Trigonometry',
+      'Precalculus — Complex numbers',
+      'Precalculus — Rational functions',
+      'Precalculus — Conic sections',
+      'Precalculus — Vectors',
+      'Precalculus — Matrices',
+      'Precalculus — Probability and combinatorics',
+      'Precalculus — Series',
+      'Precalculus — Limits and continuity',
+      'Get ready for AP Calculus — Limits and continuity',
+      'Get ready for AP Calculus — Differentiation: definition and basic derivative rules',
+      'Get ready for AP Calculus — Differentiation: composite, implicit, and inverse functions',
+      'Get ready for AP Calculus — Contextual applications of differentiation',
+      'Get ready for AP Calculus — Applying derivatives to analyze functions',
+      'Get ready for AP Calculus — Integration and accumulation of change',
+      'Get ready for AP Calculus — Applications of integration',
+      'Get ready for AP Calculus — Parametric equations, polar coordinates, and vector-valued functions',
+      'Get ready for AP Calculus — Infinite sequences and series',
+    ],
+  },
+  {
+    startWeek: 66,
+    endWeek: 78,
+    items: [
+      'High school statistics — Displaying a single quantitative variable',
+      'High school statistics — Analyzing a single quantitative variable',
+      'High school statistics — Two-way tables',
+      'High school statistics — Scatterplots',
+      'High school statistics — Study design',
+      'High school statistics — Probability',
+      'High school statistics — Probability distributions & expected value',
+      'Statistics and probability — Analyzing categorical data',
+      'Statistics and probability — Displaying and comparing quantitative data',
+      'Statistics and probability — Summarizing quantitative data',
+      'Statistics and probability — Modeling data distributions',
+      'Statistics and probability — Exploring bivariate numerical data',
+      'Statistics and probability — Study design',
+      'Statistics and probability — Probability',
+      'Statistics and probability — Counting, permutations, and combinations',
+      'Statistics and probability — Random variables',
+      'Statistics and probability — Sampling distributions',
+      'Statistics and probability — Confidence intervals',
+      'Statistics and probability — Significance tests',
+      'Statistics and probability — Chi-square tests',
+      'Statistics and probability — ANOVA',
+      'Get ready for AP Statistics — Exploring categorical data',
+      'Get ready for AP Statistics — Exploring one-variable quantitative data',
+      'Get ready for AP Statistics — Exploring two-variable quantitative data',
+      'Get ready for AP Statistics — Probability',
+      'Get ready for AP Statistics — Random variables and probability distributions',
+    ],
+  },
+  {
+    startWeek: 79,
+    endWeek: 91,
+    items: [
+      'College Algebra — Linear equations and inequalities',
+      'College Algebra — Graphs and forms of linear equations',
+      'College Algebra — Functions',
+      'College Algebra — Quadratics: Multiplying and factoring',
+      'College Algebra — Quadratic functions and equations',
+      'College Algebra — Complex numbers',
+      'College Algebra — Exponents and radicals',
+      'College Algebra — Rational expressions and equations',
+      'College Algebra — Relating algebra and geometry',
+      'College Algebra — Polynomial arithmetic',
+      'College Algebra — Advanced function types',
+      'College Algebra — Transformations of functions',
+      'College Algebra — Logarithms',
+      'Linear algebra — Vectors and spaces',
+      'Linear algebra — Matrix transformations',
+      'Linear algebra — Alternate coordinate systems (bases)',
+      'Get ready for SAT prep: Math — Get ready: Algebra',
+      'Get ready for SAT prep: Math — Get ready: Problem solving and data analysis',
+      'Get ready for SAT prep: Math — Get ready: Advanced math',
+      'Get ready for SAT prep: Math — Get ready: Geometry and trigonometry',
+    ],
+  },
+  {
+    startWeek: 92,
+    endWeek: 110,
+    items: [
+      'AP®︎/College Calculus BC — Limits and continuity',
+      'AP®︎/College Calculus BC — Differentiation: definition and basic derivative rules',
+      'AP®︎/College Calculus BC — Differentiation: composite, implicit, and inverse functions',
+      'AP®︎/College Calculus BC — Contextual applications of differentiation',
+      'AP®︎/College Calculus BC — Applying derivatives to analyze functions',
+      'AP®︎/College Calculus BC — Integration and accumulation of change',
+      'AP®︎/College Calculus BC — Differential equations',
+      'AP®︎/College Calculus BC — Applications of integration',
+      'AP®︎/College Calculus BC — Parametric equations, polar coordinates, and vector-valued functions',
+      'AP®︎/College Calculus BC — Infinite sequences and series',
+      'Differential Calculus — Limits and continuity',
+      'Differential Calculus — Derivatives: definition and basic rules',
+      'Differential Calculus — Derivatives: chain rule and other advanced topics',
+      'Differential Calculus — Applications of derivatives',
+      'Differential Calculus — Analyzing functions',
+      'Integral Calculus — Integrals',
+      'Integral Calculus — Differential equations',
+      'Integral Calculus — Applications of integrals',
+      'Calculus 1 — Limits and continuity',
+      'Calculus 1 — Integrals',
+      'Calculus 2 — Integration techniques',
+      'Calculus 2 — Differential equations',
+      'Calculus 2 — Applications of integrals',
+      'Calculus 2 — Series',
+    ],
+  },
+  {
+    startWeek: 111,
+    endWeek: 123,
+    items: [
+      'AP®︎/College Statistics — Exploring categorical data',
+      'AP®︎/College Statistics — One-variable quantitative data: displaying and describing',
+      'AP®︎/College Statistics — One-variable quantitative data: summary statistics',
+      'AP®︎/College Statistics — Percentiles, z-scores, and the normal distribution',
+      'AP®︎/College Statistics — Exploring two-variable quantitative data',
+      'AP®︎/College Statistics — Collecting data',
+      'AP®︎/College Statistics — Probability',
+      'AP®︎/College Statistics — Random variables and probability distributions',
+      'AP®︎/College Statistics — Sampling distributions',
+      'AP®︎/College Statistics — Inference for categorical data: proportions',
+      'AP®︎/College Statistics — Inference for quantitative data: means',
+      'AP®︎/College Statistics — Inference for categorical data: chi-square',
+      'AP®︎/College Statistics — Inference for quantitative data: slopes',
+      'Prepare for the 2022 AP®︎ Statistics Exam',
+      'AP®︎/College Calculus BC — AP Calculus BC solved exams',
+    ],
+  },
+  {
+    startWeek: 124,
+    endWeek: 136,
+    items: [
+      'Multivariable calculus — Thinking about multivariable functions',
+      'Multivariable calculus — Derivatives of multivariable functions',
+      'Multivariable calculus — Applications of multivariable derivatives',
+      'Multivariable calculus — Integrating multivariable functions',
+      'Multivariable calculus — Green’s, Stokes’, and the divergence theorems',
+      'Differential equations — First order differential equations',
+      'Differential equations — Second order linear equations',
+      'Differential equations — Laplace transform',
+      'Linear algebra — Vectors and spaces review',
+      'Linear algebra — Matrix transformations review',
+      'Calculus BC spiral — FRQ repair and rework',
+      'AP Statistics spiral — mixed inference review',
+    ],
+  },
+  {
+    startWeek: 137,
+    endWeek: MAX_WEEK,
+    items: [
+      'Advanced math spiral — Algebra 1 fluency audit',
+      'Advanced math spiral — Geometry theorem spiral',
+      'Advanced math spiral — Algebra 2 function spiral',
+      'Advanced math spiral — Trig identity spiral',
+      'Advanced math spiral — Precalculus problem set',
+      'Advanced math spiral — Statistics inference spiral',
+      'Advanced math spiral — Calculus BC FRQ spiral',
+      'Advanced math spiral — Linear algebra proof spiral',
+      'Advanced math spiral — Multivariable gradient spiral',
+      'Advanced math spiral — Differential equations method spiral',
+      'Advanced math spiral — SAT math maintenance',
+      'Advanced math spiral — Competition algebra maintenance',
+      'Advanced math spiral — Competition geometry maintenance',
+      'Advanced math spiral — Competition number theory maintenance',
+    ],
+  },
+];
+
+const SCIENCE_PHASE_PLANS = [
+  {
+    startWeek: 1,
+    endWeek: 52,
+    items: [
+      'Middle school biology — Cells and organisms',
+      'Middle school biology — Organism growth and reproduction',
+      'Middle school biology — Matter and energy in organisms',
+      'Middle school biology — Interactions in ecosystems',
+      'Middle school biology — Ecosystems and biodiversity',
+      'Middle school biology — Inheritance and variation',
+      'Middle school biology — Evolution',
+      'Middle school biology — Natural and artificial selection',
+      'Middle school Earth and space science — Earth in space',
+      'Middle school Earth and space science — The Earth-sun-moon system',
+      'Middle school Earth and space science — Weather and climate',
+      'Middle school Earth and space science — The geosphere',
+      'Middle school Earth and space science — Earth and society',
+      'Middle school chemistry — Classifying matter',
+      'Middle school chemistry — Physical properties of matter',
+      'Middle school chemistry — Chemical changes',
+      'Middle school chemistry — Thermal energy and heat',
+      'Middle school physics — Motion and forces',
+      'Middle school physics — Non-contact interactions',
+      'Middle school physics — Energy',
+      'Middle school physics — Waves',
+      'High school biology — Ecology and natural systems',
+      'High school biology — From cells to organisms',
+      'High school biology — The cell cycle and differentiation',
+      'High school biology — Energy and matter in biological systems',
+      'High school biology — Gene expression and regulation',
+      'High school biology — Inheritance and variation of traits',
+      'High school biology — Mechanisms of evolution',
+      'High school biology — Common ancestry and phylogeny',
+      'High school biology — Biodiversity and human impacts',
+      'High school chemistry — Atoms, isotopes, and ions',
+      'High school chemistry — Atomic models and periodicity',
+      'High school chemistry — Chemical bonding',
+      'High school chemistry — Chemical reactions',
+      'High school chemistry — Stoichiometry and the mole',
+      'High school chemistry — States of matter',
+      'High school chemistry — Thermochemistry',
+      'High school chemistry — Solutions, acids, and bases',
+      'High school chemistry — Reaction rates and equilibrium',
+      'High school chemistry — Nuclear chemistry',
+      'High school physics — Motion and forces',
+      'High school physics — Force pairs and momentum',
+      'High school physics — Gravitation',
+      'High school physics — Electrostatics',
+      'High school physics — Energy',
+      'High school physics — Electromagnetics',
+      'High school physics — Electromagnetic radiation',
+      'High school physics — Nuclear physics',
+      'Organic chemistry — Structure and bonding',
+      'Organic chemistry — Resonance and acid-base chemistry',
+      'Organic chemistry — Alkanes, cycloalkanes, and functional groups',
+      'Organic chemistry — Stereochemistry',
+      'Organic chemistry — Substitution and elimination reactions',
+      'Organic chemistry — Alkenes and alkynes',
+      'Organic chemistry — Alcohols, ethers, epoxides, sulfides',
+      'Organic chemistry — Conjugated systems and pericyclic reactions',
+      'Organic chemistry — Aromatic compounds',
+      'Organic chemistry — Aldehydes and ketones',
+      'Organic chemistry — Carboxylic acids and derivatives',
+      'Organic chemistry — Alpha carbon chemistry',
+      'Organic chemistry — Amines',
+      'Organic chemistry — Spectroscopy',
+      'Health and medicine — Introduction to human body systems',
+      'Health and medicine — Circulatory system anatomy and physiology',
+      'Health and medicine — Respiratory system anatomy and physiology',
+      'Health and medicine — Endocrine system physiology and disease',
+      'Health and medicine — Nervous system physiology and disease',
+      'Health and medicine — Brain function and mental health',
+      'Health and medicine — Gastrointestinal system physiology and disease',
+      'Health and medicine — Musculoskeletal system physiology and disease',
+      'Health and medicine — Reproductive system and pregnancy',
+      'Health and medicine — Infectious diseases',
+    ],
+  },
+  {
+    startWeek: 53,
+    endWeek: 78,
+    items: [
+      'AP®︎/College Biology — Chemistry of life',
+      'AP®︎/College Biology — Cell structure and function',
+      'AP®︎/College Biology — Cellular energetics',
+      'AP®︎/College Biology — Cell communication and cell cycle',
+      'AP®︎/College Biology — Heredity',
+      'AP®︎/College Biology — Gene expression and regulation',
+      'AP®︎/College Biology — Natural selection',
+      'AP®︎/College Biology — Ecology',
+      'AP®︎/College Chemistry — Atomic structure and properties',
+      'AP®︎/College Chemistry — Molecular and ionic compound structure and properties',
+      'AP®︎/College Chemistry — Intermolecular forces and properties',
+      'AP®︎/College Chemistry — Chemical reactions',
+      'AP®︎/College Chemistry — Kinetics',
+      'AP®︎/College Chemistry — Thermodynamics',
+      'AP®︎/College Chemistry — Equilibrium',
+      'AP®︎/College Chemistry — Acids and bases',
+      'AP®︎/College Chemistry — Applications of thermodynamics',
+      'AP®︎/College Environmental science — Ecosystems and biodiversity',
+      'AP®︎/College Environmental science — Populations',
+      'AP®︎/College Environmental science — Earth systems and resources',
+      'AP®︎/College Environmental science — Land and water use',
+      'AP®︎/College Environmental science — Energy resources and consumption',
+      'AP®︎/College Environmental science — Atmospheric pollution',
+      'AP®︎/College Environmental science — Aquatic and terrestrial pollution',
+      'AP®︎/College Environmental science — Global change',
+    ],
+  },
+  {
+    startWeek: 105,
+    endWeek: 130,
+    items: [
+      'AP®︎/College Physics 1 — Kinematics',
+      'AP®︎/College Physics 1 — Force and translational dynamics',
+      'AP®︎/College Physics 1 — Work, energy, and power',
+      'AP®︎/College Physics 1 — Linear momentum',
+      'AP®︎/College Physics 1 — Torque and rotational dynamics',
+      'AP®︎/College Physics 1 — Energy and momentum of rotating systems',
+      'AP®︎/College Physics 1 — Oscillations',
+      'AP®︎/College Physics 1 — Fluids',
+      'AP®︎/College Physics 2 — Thermodynamics',
+      'AP®︎/College Physics 2 — Electric force, field, and potential',
+      'AP®︎/College Physics 2 — Electric circuits',
+      'AP®︎/College Physics 2 — Magnetism and electromagnetism',
+      'AP®︎/College Physics 2 — Geometric optics',
+      'AP®︎/College Physics 2 — Waves, sound, and physical optics',
+      'AP®︎/College Physics 2 — Modern physics',
+    ],
+  },
+  {
+    startWeek: 131,
+    endWeek: MAX_WEEK,
+    items: [
+      'Science spiral — AP Biology FRQ repair',
+      'Science spiral — AP Chemistry calculation repair',
+      'Science spiral — AP Environmental Science source audit',
+      'Science spiral — AP Physics 1 mixed set',
+      'Science spiral — AP Physics 2 mixed set',
+      'Science spiral — Organic chemistry reaction map review',
+      'Science spiral — Health and medicine system review',
+      'Science spiral — Lab-style writeup and graph interpretation',
+    ],
+  },
+];
+
+const ENGLISH_PHASE_PLANS = [
+  {
+    startWeek: 14,
+    endWeek: 26,
+    items: [
+      '7th grade reading and vocab — Blazing new trails',
+      '7th grade reading and vocab — Blazing new trails: Long passage practice',
+      '7th grade reading and vocab — Uncovering meaning',
+      '7th grade reading and vocab — Uncovering meaning: Long passage practice',
+      '7th grade reading and vocab — Mysteries',
+      '7th grade reading and vocab — Mysteries: Long passage practice',
+    ],
+  },
+  {
+    startWeek: 27,
+    endWeek: 39,
+    items: [
+      '8th grade reading and vocab — The mind at play',
+      '8th grade reading and vocab — The mind at play: Long passage practice',
+      '8th grade reading and vocab — The world beneath',
+      '8th grade reading and vocab — The world beneath: Long passage practice',
+      '8th grade reading and vocab — To your health',
+      '8th grade reading and vocab — To your health: Long passage practice',
+    ],
+  },
+  {
+    startWeek: 40,
+    endWeek: 52,
+    items: [
+      '9th grade reading and vocab — Bridging the gap',
+      '9th grade reading and vocab — Bridging the gap: Long passage practice',
+      '9th grade reading and vocab — Crossing the line',
+      '9th grade reading and vocab — Crossing the line: Long passage practice',
+      '9th grade reading and vocab — Thriving',
+      '9th grade reading and vocab — Thriving: Long passage practice',
+    ],
+  },
+  {
+    startWeek: 53,
+    endWeek: 65,
+    items: [
+      '10th grade reading and vocab — Into the unknown',
+      '10th grade reading and vocab — Into the unknown: Long passage practice',
+      '10th grade reading and vocab — Ties that bind',
+      '10th grade reading and vocab — Ties that bind: Long passage practice',
+      '10th grade reading and vocab — Winds of change',
+      '10th grade reading and vocab — Winds of change: Long passage practice',
+    ],
+  },
+  {
+    startWeek: 66,
+    endWeek: MAX_WEEK,
+    items: [
+      'English spiral — annotation and passage map',
+      'English spiral — vocabulary bank and usage check',
+      'English spiral — long-passage timed read',
+      'English spiral — evidence selection and short response',
+      'English spiral — style imitation and sentence revision',
+      'English spiral — one polished paragraph',
+    ],
+  },
+];
+
+const CS_PHASE_PLANS = [
+  {
+    startWeek: 27,
+    endWeek: 39,
+    items: [
+      'Intro to computer science - Python — Computational thinking with variables',
+      'Intro to computer science - Python — Designing algorithms with conditionals',
+      'Intro to computer science - Python — Simulating phenomena with loops',
+      'Intro to computer science - Python — Playing games with functions',
+      'Intro to computer science - Python — Automating tasks with lists',
+      'Intro to computer science - Python — Analyzing data with dictionaries',
+      'Intro to computer science - Python — Building software with classes',
+      'Computer programming - JavaScript and the web — Intro to JS: Drawing & Animation',
+      'Computer programming - JavaScript and the web — Intro to HTML/CSS: Making webpages',
+      'Computer programming - JavaScript and the web — Intro to SQL: Querying and managing data',
+      'Computer programming - JavaScript and the web — Advanced JS: Games & Visualizations',
+      'Computer programming - JavaScript and the web — Advanced JS: Natural Simulations',
+      'Computer programming - JavaScript and the web — HTML/JS: Making webpages interactive',
+      'Computer programming - JavaScript and the web — HTML/JS: Making webpages interactive with jQuery',
+    ],
+  },
+  {
+    startWeek: 40,
+    endWeek: 52,
+    items: [
+      'AP®︎/College Computer Science Principles — Digital information',
+      'AP®︎/College Computer Science Principles — The Internet',
+      'AP®︎/College Computer Science Principles — Programming',
+      'AP®︎/College Computer Science Principles — Algorithms',
+      'AP®︎/College Computer Science Principles — Data analysis',
+      'AP®︎/College Computer Science Principles — Simulations',
+      'AP®︎/College Computer Science Principles — Online data security',
+      'AP®︎/College Computer Science Principles — Computing innovations',
+      'AP®︎/College Computer Science Principles — Exam preparation',
+      'Computers and the Internet — Digital information',
+      'Computers and the Internet — Computers',
+      'Computers and the Internet — The Internet',
+      'Computers and the Internet — Online data security',
+      'Computers and the Internet — Computing innovations',
+      'Computer science theory — Algorithms',
+      'Computer science theory — Cryptography',
+      'Computer science theory — Information theory',
+    ],
+  },
+  {
+    startWeek: 53,
+    endWeek: 65,
+    items: [
+      'AP CSP review — multiple choice spiral',
+      'AP CSP review — performance task checkpoint',
+      'AP CSP review — data and Internet concepts spiral',
+      'AP CSP review — programming and algorithm repair',
+    ],
+  },
+];
+
+const SAT_PHASE_PLANS = [
+  {
+    startWeek: 53,
+    endWeek: 65,
+    items: [
+      'Get ready for SAT prep: Reading and Writing — Foundations: Information and Ideas',
+      'Get ready for SAT prep: Reading and Writing — Foundations: Craft and Structure',
+      'Get ready for SAT prep: Reading and Writing — Foundations: Expression of Ideas + Standard English Conventions',
+      'SAT Grammar practice — conventions drill',
+    ],
+  },
+  {
+    startWeek: 79,
+    endWeek: 91,
+    items: [
+      'Get ready for SAT prep: Math — About the SAT suite of assessments and how to use this course',
+      'Get ready for SAT prep: Math — Get ready: Algebra',
+      'Get ready for SAT prep: Math — Get ready: Problem solving and data analysis',
+      'Get ready for SAT prep: Math — Get ready: Advanced math',
+      'Get ready for SAT prep: Math — Get ready: Geometry and trigonometry',
+    ],
+  },
+  {
+    startWeek: 111,
+    endWeek: 136,
+    items: [
+      'SAT Math — Foundations: Algebra',
+      'SAT Math — Foundations: Problem solving and data analysis',
+      'SAT Math — Foundations: Advanced math',
+      'SAT Math — Foundations: Geometry and trigonometry',
+      'SAT Math — Medium: Algebra',
+      'SAT Math — Medium: Problem solving and data analysis',
+      'SAT Math — Medium: Advanced math',
+      'SAT Math — Medium: Geometry and trigonometry',
+      'SAT Math — Advanced: Algebra',
+      'SAT Math — Advanced: Problem solving and data analysis',
+      'SAT Math — Advanced: Advanced math',
+      'SAT Math — Advanced: Geometry and trigonometry',
+      'SAT Reading and Writing — Foundations: Information and Ideas',
+      'SAT Reading and Writing — Foundations: Craft and Structure',
+      'SAT Reading and Writing — Foundations: Expression of Ideas + Standard English Conventions',
+      'SAT Reading and Writing — Medium: Information and Ideas',
+      'SAT Reading and Writing — Medium: Craft and Structure',
+      'SAT Reading and Writing — Medium: Expression of Ideas + Standard English Conventions',
+      'SAT Reading and Writing — Advanced: Information and Ideas',
+      'SAT Reading and Writing — Advanced: Craft and Structure',
+      'SAT Reading and Writing — Advanced: Expression of Ideas + Standard English Conventions',
+    ],
+  },
+];
+
+const AP_CONTENT_PHASE_PLANS = [
+  {
+    startWeek: 27,
+    endWeek: 52,
+    items: [
+      'AP Computer Science Principles 1.1: Digital information',
+      'AP Computer Science Principles 2.1: The Internet',
+      'AP Computer Science Principles 3.1: Programming',
+      'AP Computer Science Principles 4.1: Algorithms',
+      'AP Computer Science Principles 5.1: Data analysis',
+      'AP Computer Science Principles 6.1: Simulations',
+      'AP Computer Science Principles 7.1: Online data security',
+      'AP Computer Science Principles 8.1: Computing innovations',
+      'AP Biology 1.1: Chemistry of life',
+      'AP Biology 2.1: Cell structure and function',
+      'AP Biology 3.1: Cellular energetics',
+      'AP Biology 4.1: Cell communication and cell cycle',
+      'AP Biology 5.1: Heredity',
+      'AP Biology 6.1: Gene expression and regulation',
+      'AP Biology 7.1: Natural selection',
+      'AP Biology 8.1: Ecology',
+      'AP Chemistry 1.1: Atomic structure and properties',
+      'AP Chemistry 2.1: Molecular and ionic compound structure and properties',
+      'AP Chemistry 3.1: Intermolecular forces and properties',
+      'AP Chemistry 4.1: Chemical reactions',
+      'AP Chemistry 5.1: Kinetics',
+      'AP Chemistry 6.1: Thermodynamics',
+      'AP Chemistry 7.1: Equilibrium',
+      'AP Chemistry 8.1: Acids and bases',
+      'AP Environmental Science 1.1: Ecosystems and biodiversity',
+      'AP Environmental Science 2.1: Populations',
+      'AP Environmental Science 3.1: Earth systems and resources',
+      'AP Environmental Science 4.1: Land and water use',
+      'AP Environmental Science 5.1: Energy resources and consumption',
+      'AP Environmental Science 6.1: Atmospheric pollution',
+      'AP Environmental Science 7.1: Aquatic and terrestrial pollution',
+      'AP Environmental Science 8.1: Global change',
+    ],
+  },
+  {
+    startWeek: 66,
+    endWeek: 91,
+    items: [
+      'AP Physics 1 1.1: Kinematics',
+      'AP Physics 1 2.1: Force and translational dynamics',
+      'AP Physics 1 3.1: Work, energy, and power',
+      'AP Physics 1 4.1: Linear momentum',
+      'AP Physics 1 5.1: Torque and rotational dynamics',
+      'AP Physics 1 6.1: Energy and momentum of rotating systems',
+      'AP Physics 1 7.1: Oscillations',
+      'AP Physics 1 8.1: Fluids',
+      'AP Physics 2 1.1: Thermodynamics',
+      'AP Physics 2 2.1: Electric force, field, and potential',
+      'AP Physics 2 3.1: Electric circuits',
+      'AP Physics 2 4.1: Magnetism and electromagnetism',
+      'AP Physics 2 5.1: Geometric optics',
+      'AP Physics 2 6.1: Waves, sound, and physical optics',
+      'AP Physics 2 7.1: Modern physics',
+      'AP Precalculus 1.1: Functions and change',
+      'AP Precalculus 2.1: Polynomial and rational functions',
+      'AP Precalculus 3.1: Exponential and logarithmic functions',
+      'AP Precalculus 4.1: Trigonometric and polar functions',
+      'AP Psychology 1.1: Biological bases of behavior',
+      'AP Psychology 2.1: Cognition',
+      'AP Psychology 3.1: Development and learning',
+      'AP Psychology 4.1: Social psychology and personality',
+    ],
+  },
+  {
+    startWeek: 92,
+    endWeek: 156,
+    items: [
+      'AP Calculus BC 1.1: Limits and continuity',
+      'AP Calculus BC 2.1: Differentiation basic rules',
+      'AP Calculus BC 3.1: Composite, implicit, and inverse functions',
+      'AP Calculus BC 4.1: Contextual applications of differentiation',
+      'AP Calculus BC 5.1: Applying derivatives to analyze functions',
+      'AP Calculus BC 6.1: Integration and accumulation of change',
+      'AP Calculus BC 7.1: Differential equations',
+      'AP Calculus BC 8.1: Applications of integration',
+      'AP Calculus BC 9.1: Parametric equations, polar coordinates, and vector-valued functions',
+      'AP Calculus BC 10.1: Infinite sequences and series',
+      'AP Statistics 1.1: Exploring categorical data',
+      'AP Statistics 2.1: One-variable quantitative data',
+      'AP Statistics 3.1: Two-variable quantitative data',
+      'AP Statistics 4.1: Collecting data',
+      'AP Statistics 5.1: Probability',
+      'AP Statistics 6.1: Random variables and probability distributions',
+      'AP Statistics 7.1: Sampling distributions',
+      'AP Statistics 8.1: Inference for categorical data',
+      'AP Statistics 9.1: Inference for quantitative data',
+      'AP Statistics 10.1: Chi-square and slopes',
+      'AP Computer Science A 1.1: Java classes and objects',
+      'AP Computer Science A 2.1: Control flow',
+      'AP Computer Science A 3.1: Arrays and array lists',
+      'AP Computer Science A 4.1: Inheritance and polymorphism',
+    ],
+  },
+  {
+    startWeek: 157,
+    endWeek: MAX_WEEK,
+    items: [
+      'AP spiral — Biology FRQ repair set',
+      'AP spiral — Chemistry FRQ repair set',
+      'AP spiral — Environmental Science data response',
+      'AP spiral — Physics 1 mixed exam set',
+      'AP spiral — Physics 2 mixed exam set',
+      'AP spiral — Calculus BC solved exam repair',
+      'AP spiral — Statistics mixed inference set',
+      'AP spiral — Computer Science A code repair set',
+      'AP spiral — Computer Science Principles concept audit',
+      'AP spiral — Psychology source and concept review',
+    ],
+  },
+];
+
+function findPhasePlan(plans, weekNum) {
+  return plans.find(plan => weekNum >= plan.startWeek && weekNum <= plan.endWeek) || null;
+}
+
+function buildMathWeeklyTasks(weekNum) {
+  const phase = findPhasePlan(KHAN_PHASE_PLANS, weekNum);
+  const items = phase ? scheduledItemsForWeek(phase.items, weekNum, phase.startWeek, phase.endWeek, 14) : [];
+
+  return items.map((item, idx) => directiveWeekTask({
+    id: taskId('directive', 'khan', weekNum, idx + 1, item),
+    title: `Khan Academy — ${item}`,
+    category: CATEGORY.KHAN_MATH,
+    templateType: TEMPLATE.KHAN,
+    weekNum,
+    assignment: `Complete "${item}" on Khan Academy. Include screenshots and handwritten notes in the Quarter Proof Doc before marking complete.`,
+    instructions: 'Proof First, Check Second. Finish the assigned unit, upload screenshots, and add handwritten notes or worked examples.',
+    checklist: ['Finish the assigned unit', 'Upload screenshots', 'Upload handwritten notes'],
+    payload: {
+      categoryKey: 'khan_math',
+      courseUnit: item,
+      proofDocRequired: true,
+    },
+    resourceUrl: searchUrlFor(item),
+  }));
+}
+
+function buildCompetitionWeeklyTasks(weekNum) {
+  if (weekNum <= 26) {
+    const topics = scheduledItemsForWeek(AMC_FOUNDATION_TOPICS, weekNum, 1, 26, 4);
+    const tasks = [];
+
+    topics.forEach((item, idx) => {
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'amc_foundation', weekNum, idx + 1, item.domain, item.topic, 'learn'),
+          title: `AMC Foundation — ${item.domain}: ${item.topic}`,
+          category: CATEGORY.AMC8,
+          templateType: 'amc_topic_log',
+          weekNum,
+          assignment: `Learn ${item.topic}. Write a clean topic log with the theorem, one worked example, and one original check problem.`,
+          instructions: 'This is content-first. Do not take a full AMC exam set here. Submit the topic log and handwritten work.',
+          checklist: ['Write the core theorem or definition', 'Do one worked example', 'Add one original check problem'],
+          payload: {
+            categoryKey: 'competition_math',
+            domain: item.domain,
+            topic: item.topic,
+            proofDocRequired: true,
+          },
+        }),
+        directiveWeekTask({
+          id: taskId('directive', 'amc_foundation', weekNum, idx + 1, item.domain, item.topic, 'drill'),
+          title: `AMC Foundation Drill — ${item.topic}`,
+          category: CATEGORY.AMC8,
+          templateType: 'amc_topic_log',
+          weekNum,
+          assignment: `Do a short drill for ${item.topic}: 4-6 targeted problems, one polished solution, and an updated error list.`,
+          instructions: 'No free-choice work. Use a targeted set that matches the topic named in the title.',
+          checklist: ['Complete 4-6 targeted problems', 'Write one polished solution', 'Update the error list'],
+          payload: {
+            categoryKey: 'competition_math',
+            domain: item.domain,
+            topic: item.topic,
+            proofDocRequired: true,
+          },
+        })
+      );
+    });
+
+    return tasks;
+  }
+
+  const examPool =
+    weekNum <= 52
+      ? ['AMC 8 2020', 'AMC 8 2021', 'AMC 8 2022', 'AMC 8 2023']
+      : weekNum <= 104
+        ? ['AMC 10A 2020', 'AMC 10B 2021', 'AMC 10A 2022', 'AMC 10B 2023']
+        : ['AIME I 2020', 'AIME II 2021', 'AIME I 2022', 'AIME II 2023'];
+  const examLabel = rotate(examPool, weekNum);
+  const category = weekNum <= 52 ? CATEGORY.AMC8 : weekNum <= 104 ? CATEGORY.AMC10 : CATEGORY.AIME;
+  const ranges = weekNum <= 52
+    ? ['Problems 1-5', 'Problems 6-10', 'Problems 11-15', 'Problems 16-20', 'Problems 21-25']
+    : weekNum <= 104
+      ? ['Problems 1-5', 'Problems 6-10', 'Problems 11-15', 'Problems 16-20', 'Problems 21-25']
+      : ['Problems 1-3', 'Problems 4-6', 'Problems 7-9', 'Problems 10-12', 'Problems 13-15'];
+
+  const tasks = ranges.map((rangeLabel, idx) => directiveWeekTask({
+    id: taskId('directive', 'competition_exam', weekNum, examLabel, rangeLabel),
+    title: `${examLabel} — ${rangeLabel}`,
+    category,
+    templateType: idx === 4 ? TEMPLATE.TIMED_EXAM : 'amc_topic_log',
+    weekNum,
+    assignment: `Complete ${examLabel} ${rangeLabel}. Use the exact source named in the title.`,
+    instructions: idx === 4
+      ? 'Run this as a timed set. Upload the timer result, scratch work, and the final score sheet.'
+      : 'Upload scratch work and the scored set. Mark every miss clearly.',
+    checklist: idx === 4
+      ? ['Run the timer', 'Upload scratch work', 'Upload the score sheet']
+      : ['Complete the exact range', 'Upload scratch work', 'Score the set'],
+    payload: {
+      categoryKey: 'competition_math',
+      examLabel,
+      problemSet: `${examLabel} ${rangeLabel}`,
+      proofDocRequired: true,
+    },
+  }));
+
+  tasks.push(
+    directiveWeekTask({
+      id: taskId('directive', 'competition_exam', weekNum, examLabel, 'corrections'),
+      title: `${examLabel} — Corrections for Every Miss`,
+      category,
+      templateType: TEMPLATE.REVIEW,
+      weekNum,
+      assignment: `Correct every missed problem from this week's ${examLabel} work.`,
+      instructions: 'For each miss, show the first wrong move and the corrected method.',
+      checklist: ['Correct every miss', 'Name the mistake on each'],
+      payload: {
+        categoryKey: 'competition_math',
+        examLabel,
+        proofDocRequired: true,
+      },
+    }),
+    directiveWeekTask({
+      id: taskId('directive', 'competition_exam', weekNum, examLabel, 'polished'),
+      title: `${examLabel} — One Polished Solution`,
+      category,
+      templateType: TEMPLATE.MATH_PROOF,
+      weekNum,
+      assignment: `Write one polished solution from this week's ${examLabel} set.`,
+      instructions: 'Choose the hardest worthwhile problem you solved and rewrite it cleanly.',
+      checklist: ['Write one polished solution', 'Upload the final version'],
+      payload: {
+        categoryKey: 'competition_math',
+        examLabel,
+        proofDocRequired: true,
+      },
+    }),
+    directiveWeekTask({
+      id: taskId('directive', 'competition_exam', weekNum, examLabel, 'topic_repair'),
+      title: `${examLabel} — Topic Repair`,
+      category,
+      templateType: 'amc_topic_log',
+      weekNum,
+      assignment: `Extract the weakest topic from this week's ${examLabel} work and repair it with one mini-topic log.`,
+      instructions: 'This must name the topic, rewrite the key theorem or pattern, and include one clean example.',
+      checklist: ['Name the weak topic', 'Rewrite the key pattern', 'Add one clean example'],
+      payload: {
+        categoryKey: 'competition_math',
+        examLabel,
+        proofDocRequired: true,
+      },
+    })
+  );
+
+  return tasks;
+}
+
+function buildAcademicSupportTasks(weekNum) {
+  const tasks = [];
+  const sciencePhase = findPhasePlan(SCIENCE_PHASE_PLANS, weekNum);
+  const englishPhase = findPhasePlan(ENGLISH_PHASE_PLANS, weekNum);
+  const csPhase = findPhasePlan(CS_PHASE_PLANS, weekNum);
+  const satPhase = findPhasePlan(SAT_PHASE_PLANS, weekNum);
+
+  if (weekNum <= 26) {
+    const apCourses = scheduledItemsForWeek(AP_EXPLORATION_COURSES, weekNum, 1, 26, 2);
+    apCourses.forEach((courseName, idx) => {
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'ap_exploration', weekNum, idx + 1, courseName),
+          title: `AP Exploration — ${courseName}`,
+          category: CATEGORY.AP,
+          templateType: TEMPLATE.AP_CURRICULUM_ANALYSIS,
+          weekNum,
+          assignment: `Complete the full AP Curriculum Analysis worksheet for ${courseName}.`,
+          instructions: 'Use the exact sections from the AP Curriculum Analysis template: score distributions, T20 credit policy, difficulty, strategic value, conceptual challenges, final synthesis, personal fit, and documented sources.',
+          checklist: ['Complete Parts 1-6', 'List all source links', 'Upload the finished proof doc link'],
+          payload: {
+            categoryKey: 'ap',
+            courseName,
+            proofDocRequired: true,
+          },
+          resourceUrl: searchUrlFor(`${courseName} score distributions AP Central`),
+        })
+      );
+    });
+  }
+
+  if (sciencePhase) {
+    const scienceItems = scheduledItemsForWeek(sciencePhase.items, weekNum, sciencePhase.startWeek, sciencePhase.endWeek, 6);
+    scienceItems.forEach((item, idx) => {
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'science', weekNum, idx + 1, item),
+          title: `Science — ${item}`,
+          category: CATEGORY.SCIENCE,
+          templateType: TEMPLATE.KHAN,
+          weekNum,
+          assignment: `Complete "${item}" and submit screenshots plus handwritten notes.`,
+          instructions: 'Use the exact Khan Academy or AP course unit named in the title. Upload proof before marking complete.',
+          checklist: ['Complete the assigned unit', 'Upload screenshots', 'Upload handwritten notes'],
+          payload: {
+            categoryKey: 'science',
+            courseUnit: item,
+            proofDocRequired: true,
+          },
+          resourceUrl: searchUrlFor(item),
+        })
+      );
+    });
+  }
+
+  if (englishPhase) {
+    const englishItems = scheduledItemsForWeek(englishPhase.items, weekNum, englishPhase.startWeek, englishPhase.endWeek, 4);
+    englishItems.forEach((item, idx) => {
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'english', weekNum, idx + 1, item),
+          title: `English — ${item}`,
+          category: CATEGORY.ENGLISH,
+          templateType: item.toLowerCase().includes('long passage') ? TEMPLATE.READING_LOG : TEMPLATE.WRITING,
+          weekNum,
+          assignment: `Complete "${item}" and upload the proof link for the finished work.`,
+          instructions: 'If this is a long passage practice, include annotations and answer work. If this is a theme unit, include notes and written response.',
+          checklist: ['Complete the assigned work', 'Upload the proof link'],
+          payload: {
+            categoryKey: item.toLowerCase().includes('long passage') ? 'reading' : 'writing',
+            courseUnit: item,
+            proofDocRequired: true,
+          },
+          resourceUrl: searchUrlFor(item),
+        })
+      );
+    });
+  }
+
+  if (csPhase) {
+    const csItems = scheduledItemsForWeek(csPhase.items, weekNum, csPhase.startWeek, csPhase.endWeek, 4);
+    csItems.forEach((item, idx) => {
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'cs', weekNum, idx + 1, item),
+          title: `Computer Science — ${item}`,
+          category: CATEGORY.COMPUTER_SCIENCE,
+          templateType: TEMPLATE.KHAN,
+          weekNum,
+          assignment: `Complete "${item}" and upload screenshots plus notes or code proof.`,
+          instructions: 'Use the exact Khan Academy track named in the title. Include proof of completion and any handwritten or typed notes.',
+          checklist: ['Complete the assigned module', 'Upload screenshots', 'Upload notes or code proof'],
+          payload: {
+            categoryKey: 'computer_science',
+            courseUnit: item,
+            proofDocRequired: true,
+          },
+          resourceUrl: searchUrlFor(item),
+        })
+      );
+    });
+  }
+
+  if (satPhase) {
+    const satItems = scheduledItemsForWeek(satPhase.items, weekNum, satPhase.startWeek, satPhase.endWeek, 4);
+    satItems.forEach((item, idx) => {
+      const isFullExam = item.startsWith('SAT Math —') || item.startsWith('SAT Reading and Writing —');
+      tasks.push(
+        directiveWeekTask({
+          id: taskId('directive', 'sat', weekNum, idx + 1, item),
+          title: item,
+          category: CATEGORY.SAT,
+          templateType: isFullExam ? TEMPLATE.TIMED_EXAM : TEMPLATE.KHAN,
+          weekNum,
+          assignment: isFullExam
+            ? `Take the exact SAT set named in the title. Do not convert it into a generic prep task.`
+            : `Complete the exact Khan Academy get-ready module named in the title.`,
+          instructions: isFullExam
+            ? 'Upload the score result, question list, and proof images. Add mistake buttons only for real misses.'
+            : 'Upload screenshots and notes. This is Khan prep, not a scored exam.',
+          checklist: isFullExam
+            ? ['Take the set', 'Upload the score result', 'Upload proof images']
+            : ['Complete the module', 'Upload screenshots', 'Upload notes'],
+          payload: {
+            categoryKey: 'sat',
+            courseUnit: item,
+            proofDocRequired: true,
+          },
+          resourceUrl: searchUrlFor(item),
+        })
+      );
+    });
+  }
+
+  return tasks;
+}
+
+function buildReportTasks(weekNum) {
+  const tasks = [];
+  const careerIndex = (weekNum - 1) * 2;
+  const careerSlice = CAREER_STARTER_KIT.slice(careerIndex, careerIndex + 2);
+
+  careerSlice.forEach((careerName, idx) => {
+    tasks.push(
+      directiveWeekTask({
+        id: taskId('directive', 'career', weekNum, idx + 1, careerName),
+        title: `Career Report — ${careerName}`,
+        category: CATEGORY.CAREER,
+        templateType: TEMPLATE.CAREER_REPORT,
+        weekNum,
+        assignment: `Complete the full Career Report for ${careerName}.`,
+        instructions: 'Use the exact report structure: executive overview, job description, educational requirements, skills, progression, compensation, market analysis, day-to-day reality, personal fit, and references.',
+        checklist: ['Complete every section', 'Cite all sources', 'Upload the finished proof doc link'],
+        payload: {
+          categoryKey: 'career',
+          careerName,
+          proofDocRequired: true,
+        },
+        resourceUrl: searchUrlFor(`${careerName} career outlook BLS`),
+      })
+    );
+  });
+
+  if (weekNum <= COLLEGE_REPORT_SCHOOLS.length) {
+    const schoolName = COLLEGE_REPORT_SCHOOLS[weekNum - 1];
+    tasks.push(
+      directiveWeekTask({
+        id: taskId('directive', 'college', weekNum, 'report', schoolName),
+        title: `College Research — ${schoolName}`,
+        category: CATEGORY.COLLEGE,
+        templateType: TEMPLATE.COLLEGE_RESEARCH,
+        weekNum,
+        assignment: `Complete the full College Research Framework for ${schoolName}.`,
+        instructions: 'Use the exact sections from the college template, including the final spreadsheet update.',
+        checklist: ['Complete every section', 'List all source links', 'Update the spreadsheet'],
+        payload: {
+          categoryKey: 'college',
+          schoolName,
+          proofDocRequired: true,
+        },
+        resourceUrl: searchUrlFor(`${schoolName} common data set`),
+      }),
+      directiveWeekTask({
+        id: taskId('directive', 'college', weekNum, 'spreadsheet', schoolName),
+        title: `College Search Spreadsheet — ${schoolName}`,
+        category: CATEGORY.COLLEGE,
+        templateType: TEMPLATE.COLLEGE_RESEARCH,
+        weekNum,
+        assignment: `Fill in the College Search Spreadsheet.xlsx row for ${schoolName}.`,
+        instructions: 'Do this after the full report so the spreadsheet reflects real sourced data.',
+        checklist: ['Fill the spreadsheet row', 'Upload spreadsheet proof'],
+        payload: {
+          categoryKey: 'college',
+          schoolName,
+          proofDocRequired: true,
+        },
+      })
+    );
+  }
+
+  if (careerSlice.length === 0) {
+    tasks.push(
+      directiveWeekTask({
+        id: taskId('directive', 'career_followup', weekNum, 1),
+        title: 'Career Comparison Memo — Two Similar Paths',
+        category: CATEGORY.CAREER,
+        templateType: TEMPLATE.CAREER_REPORT,
+        weekNum,
+        assignment: 'Compare two previously researched careers with similar prestige but different day-to-day realities.',
+        instructions: 'Use compensation, path length, lifestyle, and fit as the comparison axes.',
+        checklist: ['Name two careers', 'Compare the path and risk', 'Upload the proof doc link'],
+        payload: {
+          categoryKey: 'career',
+          proofDocRequired: true,
+        },
+      }),
+      directiveWeekTask({
+        id: taskId('directive', 'career_followup', weekNum, 2),
+        title: 'Career Market Shift Memo — Update One Prior Report',
+        category: CATEGORY.CAREER,
+        templateType: TEMPLATE.CAREER_REPORT,
+        weekNum,
+        assignment: 'Update one prior career report with fresh labor-market and compensation data.',
+        instructions: 'Keep the structure tight. Add new citations and revise any stale claims.',
+        checklist: ['Update one prior report', 'Refresh the citations'],
+        payload: {
+          categoryKey: 'career',
+          proofDocRequired: true,
+        },
+      })
+    );
+  }
+
+  return tasks;
+}
+
+function buildExecutionTasks(weekNum) {
+  const tasks = [
+    {
+      title: 'Weekly Preview + Previous Week Reflection',
+      templateType: 'weekly_preview',
+      assignment: 'Reflect on the previous week first, then preview this week. Name what slipped, what was fixed, and what matters next.',
+      checklist: ['Reflect on the previous week', 'List this week’s priorities', 'Upload the proof doc link'],
+    },
+    {
+      title: 'Quarter Proof Doc — Khan Screenshots Batch',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'Upload this week’s Khan screenshots and handwritten math notes to the Quarter Proof Doc.',
+      checklist: ['Upload screenshots', 'Upload handwritten notes'],
+    },
+    {
+      title: 'Quarter Proof Doc — Competition Math Batch',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'Upload competition scratch work, scored sets, and polished solution proof.',
+      checklist: ['Upload scratch work', 'Upload scored sets', 'Upload polished solution'],
+    },
+    {
+      title: 'Quarter Proof Doc — Science / AP Batch',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'Upload science, AP, and lab-style notes for this week before anything is marked complete.',
+      checklist: ['Upload science proof', 'Upload AP proof'],
+    },
+    {
+      title: 'Quarter Proof Doc — English / Writing Batch',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'Upload reading annotations, written responses, and passage-work proof.',
+      checklist: ['Upload annotations', 'Upload written response proof'],
+    },
+    {
+      title: 'Quarter Proof Doc — Career / College Batch',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'Upload the current week’s career and college report proof links.',
+      checklist: ['Upload career proof', 'Upload college proof'],
+    },
+    {
+      title: 'Sunday Closeout — Proof Audit',
+      templateType: TEMPLATE.REVIEW,
+      assignment: 'Audit every task due this week. If proof is missing, fix it before the Sunday cutoff.',
+      checklist: ['Check every due task', 'Fix missing proof'],
+    },
+    {
+      title: 'Sunday Closeout — Revision Queue',
+      templateType: TEMPLATE.REVIEW,
+      assignment: 'Re-open any task that needs re-review or edits and close the loop with corrected proof.',
+      checklist: ['List revision items', 'Upload corrected proof'],
+    },
+    {
+      title: 'Quarter Proof Doc — Daily Sweep',
+      templateType: TEMPLATE.OTHER,
+      assignment: 'At the end of each day, confirm that the Quarter Proof Doc contains that day’s screenshots, notes, and links.',
+      checklist: ['Check every day', 'Backfill any missing proof'],
+    },
+    {
+      title: 'Weekly Bonus Audit',
+      templateType: TEMPLATE.REVIEW,
+      assignment: 'Audit whether every task due this week was on time so the weekly bonus status is unambiguous.',
+      checklist: ['List every late task', 'Confirm whether the weekly bonus is still alive'],
+    },
+    {
+      title: 'Streak Audit',
+      templateType: TEMPLATE.REVIEW,
+      assignment: 'Check the streak conditions: all daily habits done, all due-today work on time, and no late or missing tasks.',
+      checklist: ['Check daily habits', 'Check due-today completion', 'Check late and missing status'],
+    },
+  ];
+
+  return tasks.map((item, idx) => directiveWeekTask({
+    id: taskId('directive', 'execution', weekNum, idx + 1, item.title),
+    title: item.title,
+    category: idx >= 6 ? CATEGORY.OTHER : CATEGORY.LIFE,
+    templateType: item.templateType,
+    weekNum,
+    assignment: item.assignment,
+    instructions: 'Proof First, Check Second. Nothing is complete until the proof is in the Quarter Proof Doc.',
+    checklist: item.checklist,
+    payload: {
+      categoryKey: idx >= 6 ? 'other' : idx === 0 ? 'writing' : 'health',
+      proofDocRequired: true,
+    },
+  }));
+}
+
+function buildHealthTasks(weekNum) {
+  const items = [
+    'Health — Sleep log for all 7 days',
+    'Health — 3 workouts with proof',
+    'Health — Meal and hydration check',
+    'Health — Night reset and room check',
+  ];
+
+  return items.map((title, idx) => directiveWeekTask({
+    id: taskId('directive', 'health', weekNum, idx + 1, title),
+    title,
+    category: CATEGORY.LIFE,
+    templateType: TEMPLATE.ACTIVITY_LOG,
+    weekNum,
+    assignment: `Complete "${title}" and upload proof.`,
+    instructions: 'Use real numbers and real proof. No estimates.',
+    checklist: ['Complete the task', 'Upload the proof'],
+    payload: {
+      categoryKey: 'health',
+      proofDocRequired: true,
+    },
+  }));
+}
+
+function generateDirectiveWeeklySeedTasks() {
+  const tasks = [];
+
+  for (let weekNum = 1; weekNum <= MAX_WEEK; weekNum += 1) {
+    tasks.push(
+      ...buildMathWeeklyTasks(weekNum),
+      ...buildCompetitionWeeklyTasks(weekNum),
+      ...buildAcademicSupportTasks(weekNum),
+      ...buildReportTasks(weekNum),
+      ...buildExecutionTasks(weekNum),
+      ...buildHealthTasks(weekNum),
+    );
+  }
+
+  return tasks;
+}
+
+function taskWeekNumber(task) {
+  const fromTask = Number(task?.weekNum);
+  if (Number.isInteger(fromTask) && fromTask >= 1 && fromTask <= MAX_WEEK) return fromTask;
+
+  const fromPrefill = Number(task?.templatePrefill?.weekNum);
+  if (Number.isInteger(fromPrefill) && fromPrefill >= 1 && fromPrefill <= MAX_WEEK) return fromPrefill;
+
+  const fromWeekId = parseInt(String(task?.weekId || '').replace(/^W0*/, ''), 10);
+  if (Number.isInteger(fromWeekId) && fromWeekId >= 1 && fromWeekId <= MAX_WEEK) return fromWeekId;
+
+  return null;
+}
+
+function keepLegacyTask(task) {
+  const weekNum = taskWeekNumber(task);
+  const title = normalizeTaskTitle(task.title).toLowerCase();
+  const templateType = normalizeString(task.templateType).toLowerCase();
+  const recurringSlot = Number(task.templatePrefill?.slot);
+
+  if (task.category === CATEGORY.COLLEGE) return false;
+  if (task.category === CATEGORY.AP) return false;
+
+  if (task.category === CATEGORY.RECURRING) {
+    if (recurringSlot === 1) return false;
+    if (recurringSlot === 2) return false;
+
+    if (weekNum && weekNum <= 26 && [0, 2].includes(recurringSlot)) {
+      return false;
+    }
+  }
+
+  if ([CATEGORY.AMC8, CATEGORY.AMC10, CATEGORY.AIME].includes(task.category) && weekNum && weekNum <= 26) {
+    const looksLikeExamWork =
+      templateType === TEMPLATE.TIMED_EXAM ||
+      templateType === TEMPLATE.MOCK_TEST ||
+      title.includes('timed') ||
+      title.includes('mock') ||
+      title.includes('competition') ||
+      title.includes('maintenance') ||
+      title.includes('mixed set') ||
+      title.includes('problems 1-') ||
+      title.includes('problems 6-') ||
+      title.includes('problems 11-') ||
+      title.includes('problems 16-') ||
+      title.includes('problems 21-');
+
+    if (looksLikeExamWork) return false;
+  }
+
+  return true;
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // FINAL AGGREGATION
 // ───────────────────────────────────────────────────────────────────────────────
@@ -8935,8 +10734,9 @@ function generateWeeklyExecutionPackets() {
 
 function flattenAllTaskCollections() {
   return [
-    ...ALL_TASK_COLLECTIONS.flat(),
-    ...generateWeeklyExecutionPackets(),
+    ...ALL_TASK_COLLECTIONS.flat().filter(keepLegacyTask),
+    ...generateDirectiveWeeklySeedTasks(),
+    ...buildApTopicSeedTasks(),
   ];
 }
 
@@ -9210,73 +11010,53 @@ function categoryKeyForSeedTask(task) {
   const title = normalizeTaskTitle(task.title).toLowerCase();
 
   if (['amc8', 'amc10', 'aime'].includes(category)) return 'competition_math';
-  if (category === 'khan_math') return 'curriculum_math';
-  if (category === 'ap' || templateType.includes('ap_') || templateType === 'timed_exam') return 'ap';
+  if (category === 'khan_math') return 'khan_math';
+  if (category === 'ap' || templateType.includes('ap_')) return 'ap';
   if (category === 'sat' || templateType.includes('sat')) return 'sat';
   if (category === 'language') return 'language';
   if (category === 'writing') return 'writing';
+  if (category === 'career') return 'career';
+  if (category === 'science') return 'science';
+  if (category === 'english') return 'english';
+  if (category === 'computer_science') return 'computer_science';
   if (category === 'project') return 'stem_project';
   if (category === 'leadership') return 'leadership';
   if (category === 'college' || category === 'application') return 'college';
   if (category === 'life' && title.includes('health')) return 'health';
   if (category === 'research' || title.includes('reading')) return 'reading';
+  if (category === 'other') return 'other';
   if (title.includes('cold email') || title.includes('outreach')) return 'leadership';
   return 'generic';
 }
 
 function dueDateForSeedTask(task) {
+  let computedDueDate = null;
+
   if (task.templatePrefill?.recurringSystem === 'daily_9_slot') {
     const weekNum = Number(task.weekNum);
     const slot = Number(task.templatePrefill?.slot);
     const dayOfWeek = Number(task.templatePrefill?.dayOfWeek || 0);
 
     if (slot >= 7) {
-      return due(isoDate(weekEndDate(weekNum)));
+      computedDueDate = due(isoDate(weekEndDate(weekNum)));
+    } else {
+      computedDueDate = actualDateForWeekDay(weekNum, dayOfWeek);
     }
-
-    return actualDateForWeekDay(weekNum, dayOfWeek);
   }
 
-  if (task.dueDate instanceof Date) return task.dueDate;
-  return due(isoDate(weekEndDate(task.weekNum)));
+  if (!computedDueDate) {
+    computedDueDate = task.dueDate instanceof Date ? task.dueDate : due(isoDate(weekEndDate(task.weekNum)));
+  }
+
+  return computedDueDate < FIRST_TASK_DATE ? cloneDate(FIRST_TASK_DATE) : computedDueDate;
 }
 
 function moneyProfileForSeedTask(task) {
-  const kind = categoryKeyForSeedTask(task);
-  const isDailyRecurring = task.templatePrefill?.recurringSystem === 'daily_9_slot' && Number(task.templatePrefill?.slot) <= 6;
-  const isWeeklyRecurring = task.templatePrefill?.recurringSystem === 'daily_9_slot' && Number(task.templatePrefill?.slot) >= 7;
-  const isTimed = String(task.templateType).toLowerCase().includes('timed');
-  const isReview = String(task.templateType).toLowerCase() === 'review';
-
-  if (isDailyRecurring) {
-    return { rewardCents: 125, penaltyLateCents: 325, penaltyMissCents: 800 };
-  }
-
-  if (isWeeklyRecurring) {
-    return { rewardCents: 200, penaltyLateCents: 500, penaltyMissCents: 1200 };
-  }
-
-  if (['competition_math', 'ap', 'sat', 'stem_project', 'college'].includes(kind)) {
-    return {
-      rewardCents: isTimed ? 700 : 500,
-      penaltyLateCents: isTimed ? 1600 : 1400,
-      penaltyMissCents: isTimed ? 3200 : 2800,
-    };
-  }
-
-  if (['curriculum_math', 'language', 'reading', 'writing'].includes(kind)) {
-    return {
-      rewardCents: isReview ? 250 : 350,
-      penaltyLateCents: isReview ? 700 : 900,
-      penaltyMissCents: isReview ? 1400 : 1800,
-    };
-  }
-
-  if (['leadership', 'health'].includes(kind)) {
-    return { rewardCents: 225, penaltyLateCents: 600, penaltyMissCents: 1500 };
-  }
-
-  return { rewardCents: 250, penaltyLateCents: 700, penaltyMissCents: 1600 };
+  return {
+    rewardCents: 2,
+    penaltyLateCents: 5,
+    penaltyMissCents: 10,
+  };
 }
 
 function defaultAssignmentForSeedTask(task, kind) {
@@ -9285,31 +11065,41 @@ function defaultAssignmentForSeedTask(task, kind) {
   const track = task.templatePrefill?.track || task.templatePrefill?.projectName;
 
   if (kind === 'competition_math') return `Complete the exact set named in the title. No substitutions.`;
-  if (kind === 'curriculum_math') return `Finish the exact ${unit || 'curriculum'} block named in the title.`;
+  if (kind === 'khan_math') return `Finish the exact ${unit || 'Khan Academy'} assignment named in the title.`;
   if (kind === 'ap') return `Complete the exact AP assignment named in the title.`;
   if (kind === 'sat') return `Complete the exact SAT module named in the title.`;
   if (kind === 'language') return `Complete the exact ${track || 'language'} assignment named in the title.`;
+  if (kind === 'career') return `Complete the exact career report named in the title.`;
+  if (kind === 'science') return `Complete the exact science assignment named in the title.`;
+  if (kind === 'english') return `Complete the exact English assignment named in the title.`;
+  if (kind === 'computer_science') return `Complete the exact computer science assignment named in the title.`;
   if (kind === 'reading') return `Finish the reading task named in the title and keep clear notes.`;
   if (kind === 'writing') return `Finish the writing task named in the title as a complete draft.`;
   if (kind === 'stem_project') return `Complete the exact ${track || 'project'} step named in the title.`;
   if (kind === 'leadership') return `Complete the leadership task named in the title with one concrete deliverable.`;
   if (kind === 'health') return `Complete the health task named in the title and record the actual numbers.`;
   if (kind === 'college') return `Complete the exact report or strategy task named in the title.`;
+  if (kind === 'other') return `Complete the exact other task named in the title.`;
   return title;
 }
 
 function defaultInstructionsForSeedTask(task, kind) {
   if (kind === 'competition_math') return 'Record attempted and correct counts. Update the error log. Submit proof through the form.';
-  if (kind === 'curriculum_math') return 'Record blocks completed, mastery checks, and one short reflection.';
+  if (kind === 'khan_math') return 'Upload screenshots and handwritten notes to the Quarter Proof Doc before marking complete.';
   if (kind === 'ap') return 'Record the source, question counts, and written FRQ or notes where required.';
-  if (kind === 'sat') return 'Record the module, timed status, question counts, and every corrected miss.';
+  if (kind === 'sat') return 'If this is an exam task, submit the score and proof images. If this is Khan get-ready, submit screenshots and notes.';
   if (kind === 'language') return 'Log new vocabulary, grammar work, and one piece of proof.';
+  if (kind === 'career') return 'Use the full career report structure and cite all sources.';
+  if (kind === 'science') return 'Upload screenshots and handwritten notes or lab-style work.';
+  if (kind === 'english') return 'Upload annotations, passage work, or written response proof.';
+  if (kind === 'computer_science') return 'Upload screenshots, code proof, and notes.';
   if (kind === 'reading') return 'Capture the text, page range, and the main idea or response.';
   if (kind === 'writing') return 'Submit the draft link and the next revision step.';
   if (kind === 'stem_project') return 'Upload one artifact and note the next blocker or next step.';
   if (kind === 'leadership') return 'Log the actual outreach, impact, and follow-up.';
   if (kind === 'health') return 'Use real sleep, exercise, and energy numbers.';
   if (kind === 'college') return 'Fill every section with concrete evidence and sources.';
+  if (kind === 'other') return 'Proof First, Check Second. Upload proof before marking complete.';
   return 'Complete the task exactly as assigned and submit structured proof.';
 }
 
@@ -9321,6 +11111,13 @@ function buildSeedTaskTemplatePrefill(task) {
     assignment: task.templatePrefill?.assignment || defaultAssignmentForSeedTask(task, kind),
     instructions: task.templatePrefill?.instructions || defaultInstructionsForSeedTask(task, kind),
     proofUploadUrl: task.templatePrefill?.proofUploadUrl || PROOF_DRIVE_URL,
+    proofFirst: true,
+    onTimeRewardCents: 2,
+    inReviewRewardCents: 1,
+    latePenaltyCents: 5,
+    missingPenaltyCents: 10,
+    weeklyBonusCents: 100,
+    quarterBonusCents: 1000,
     weekNum: task.weekNum,
   };
 }
@@ -9330,16 +11127,21 @@ function buildSeedTaskDescription(task) {
   const kind = categoryKeyForSeedTask(task);
   const labelMap = {
     competition_math: 'Competition Math',
-    curriculum_math: 'Curriculum Math',
+    khan_math: 'Khan Academy',
     ap: 'AP Study',
     sat: 'SAT Prep',
     language: 'Language',
+    career: 'Career',
+    science: 'Science',
+    english: 'English',
+    computer_science: 'Computer Science',
     reading: 'Reading',
     writing: 'Writing',
     stem_project: 'STEM Project',
     leadership: 'Leadership',
     health: 'Health',
     college: 'College Strategy',
+    other: 'Other',
     generic: 'Task',
   };
   return `${labelMap[kind] || 'Task'} · Week ${task.weekNum}`;
@@ -9432,7 +11234,7 @@ function buildPrismaTaskData(task) {
     category: task.category,
     templateType: task.templateType,
     dueDate,
-    requiresProof: task.requiresProof,
+    requiresProof: true,
     status: 'pending',
     rewardCents: economics.rewardCents,
     penaltyLateCents: economics.penaltyLateCents,
@@ -9486,19 +11288,47 @@ async function upsertSingleTask(tx, task) {
 }
 
 async function upsertTaskBatch(tx, tasks) {
-  return Promise.all(tasks.map(task => upsertSingleTask(tx, task)));
-}
-
-async function writeTasksInChunks(tx, tasks, chunkSize = 250) {
-  const chunks = chunkArray(tasks, chunkSize);
   const results = [];
 
-  for (const chunk of chunks) {
-    const batchResults = await upsertTaskBatch(tx, chunk);
-    results.push(...batchResults);
+  for (const task of tasks) {
+    const saved = await upsertSingleTask(tx, task);
+    results.push(saved);
   }
 
   return results;
+}
+
+async function writeTasksInChunks(prismaClient, tasks, chunkSize = 500, label = 'tasks') {
+  const chunks = chunkArray(tasks, chunkSize);
+  let done = 0;
+  let firstTaskId = null;
+  let lastTaskId = null;
+
+  for (let index = 0; index < chunks.length; index++) {
+    const chunk = chunks[index];
+    const batchNumber = index + 1;
+    const batchTotal = chunks.length;
+
+    console.log(`  [Batch ${batchNumber}/${batchTotal}] seeding ${chunk.length} ${label}...`);
+
+    await prismaClient.task.createMany({
+      data: chunk,
+      skipDuplicates: true,
+    });
+
+    if (!firstTaskId && chunk[0]?.id) firstTaskId = chunk[0].id;
+    if (chunk[chunk.length - 1]?.id) lastTaskId = chunk[chunk.length - 1].id;
+    done += chunk.length;
+    console.log(`  ↳ ${done} / ${tasks.length} ${label} seeded`);
+  }
+
+  console.log(`✅ Finished writing all ${label}.`);
+
+  return {
+    writtenCount: tasks.length,
+    firstTaskId,
+    lastTaskId,
+  };
 }
 
 async function clearLegacyGeneratedTasks(tx) {
@@ -9528,7 +11358,7 @@ async function clearLegacyGeneratedTasks(tx) {
 
 async function seedTasksToDatabase(prismaClient, tasks, options = {}) {
   const {
-    chunkSize = 250,
+    chunkSize = 500,
     clearLegacy = false,
   } = options;
 
@@ -9538,13 +11368,21 @@ async function seedTasksToDatabase(prismaClient, tasks, options = {}) {
     cleared = await clearLegacyGeneratedTasks(prismaClient);
   }
 
-  const written = await writeTasksInChunks(prismaClient, tasks, chunkSize);
+  const apTasks = tasks.filter(task => task.templatePrefill?.source === 'ap-topic-seed');
+  const otherTasks = tasks.filter(task => task.templatePrefill?.source !== 'ap-topic-seed');
+
+  const otherResult = otherTasks.length > 0
+    ? await writeTasksInChunks(prismaClient, otherTasks, chunkSize, 'tasks')
+    : { writtenCount: 0, firstTaskId: null, lastTaskId: null };
+  const apResult = apTasks.length > 0
+    ? await writeTasksInChunks(prismaClient, apTasks, chunkSize, 'AP tasks')
+    : { writtenCount: 0, firstTaskId: null, lastTaskId: null };
 
   return {
     cleared,
-    writtenCount: written.length,
-    firstTaskId: written[0]?.id || null,
-    lastTaskId: written[written.length - 1]?.id || null,
+    writtenCount: otherResult.writtenCount + apResult.writtenCount,
+    firstTaskId: otherResult.firstTaskId || apResult.firstTaskId || null,
+    lastTaskId: apResult.lastTaskId || otherResult.lastTaskId || null,
   };
 }
 

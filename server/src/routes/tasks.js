@@ -7,17 +7,15 @@ const {
   buildCategoryFilter,
   buildTaskSelect,
   endOfDay,
-  endOfWeekSunday,
   normalizeTask,
   startOfDay,
-  startOfWeekMonday,
 } = require('../lib/taskQueries');
 const { syncTaskOutcomeLedger, cents } = require('../lib/ledgerSummary');
 
 const prisma = new PrismaClient();
 const BATCH_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
+const DEFAULT_PAGE_SIZE = 200;
+const MAX_PAGE_SIZE = 500;
 
 function parsePagination(query) {
   const take = Math.min(parseInt(query.take, 10) || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
@@ -26,7 +24,7 @@ function parsePagination(query) {
 }
 
 function baseWhereFromQuery(query = {}) {
-  const { category, weekNumber, status, quarterId, date, dateFrom, dateTo } = query;
+  const { category, weekNumber, status, quarterId, date, dateFrom, dateTo, q, search } = query;
   const where = {};
   const and = [];
 
@@ -51,6 +49,18 @@ function baseWhereFromQuery(query = {}) {
     if (dateFrom) range.gte = startOfDay(new Date(dateFrom));
     if (dateTo) range.lte = endOfDay(new Date(dateTo));
     where.dueDate = range;
+  }
+
+  const searchText = String(q || search || '').trim();
+  if (searchText) {
+    and.push({
+      OR: [
+        { title: { contains: searchText, mode: 'insensitive' } },
+        { description: { contains: searchText, mode: 'insensitive' } },
+        { category: { contains: searchText, mode: 'insensitive' } },
+        { templateType: { contains: searchText, mode: 'insensitive' } },
+      ],
+    });
   }
 
   if (and.length > 0) where.AND = and;
@@ -187,8 +197,8 @@ router.get('/today', authenticate, async (req, res) => {
 router.get('/week', authenticate, async (req, res) => {
   try {
     const now = new Date();
-    const weekStart = startOfWeekMonday(now);
-    const weekEnd = endOfWeekSunday(now);
+    const weekStart = startOfDay(now);
+    const weekEnd = endOfDay(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000));
     const { week, quarter } = await getCurrentWeekAndQuarter(now);
     const { take, skip } = parsePagination(req.query);
 

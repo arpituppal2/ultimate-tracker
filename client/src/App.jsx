@@ -32,9 +32,9 @@ function AppRoutes() {
     <Layout>
       <ErrorBoundary>
         <Routes>
-          <Route path="/"          element={<Navigate to="/today" replace />} />
-          <Route path="/dashboard" element={<Navigate to="/today" replace />} />
-          <Route path="/today"     element={<Today />} />
+          <Route path="/"          element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<Today />} />
+          <Route path="/today"     element={<Navigate to="/dashboard" replace />} />
           <Route path="/week"      element={<Week />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/notes"     element={<Notes />} />
@@ -44,14 +44,14 @@ function AppRoutes() {
           <Route path="/balance"   element={<Navigate to="/analytics" replace />} />
           <Route path="/calendar"  element={<Navigate to="/week" replace />} />
           <Route path="/colleges"  element={<Navigate to="/trackers" replace />} />
-          <Route path="/quarter"   element={<Navigate to="/today" replace />} />
-          <Route path="/master-plan" element={<Navigate to="/today" replace />} />
-          <Route path="/inventory" element={<Navigate to="/today" replace />} />
+          <Route path="/quarter"   element={<Navigate to="/dashboard" replace />} />
+          <Route path="/master-plan" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/inventory" element={<Navigate to="/week" replace />} />
           <Route
             path="/admin"
-            element={isAdmin ? <AdminPanel /> : <Navigate to="/today" replace />}
+            element={isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" replace />}
           />
-          <Route path="*" element={<Navigate to="/today" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </ErrorBoundary>
     </Layout>

@@ -4,6 +4,7 @@ import api from '../utils/api';
 import { useAuth } from '../utils/AuthContext';
 import { PageHeader, StatusChip, formatMoney } from '../components/TaskSurface';
 import { getRequiredFieldKeys, getTaskFormSpec } from '../utils/taskFormSpecs';
+import { collectProofLinks, getTemplateDescriptor } from '../utils/templateRegistry';
 
 function Field({ label, children }) {
   return (
@@ -66,6 +67,14 @@ function weekQuarterLabel(task) {
   return parts.join(' · ');
 }
 
+function shouldHideResourceLink(task, descriptor) {
+  if (descriptor?.hideAssignmentLink) return true;
+  const url = String(task?.resourceUrl || '');
+  if (!url) return false;
+  return url.includes('khanacademy.org/search?page_search_query=')
+    || url.includes('score%20distributions%20AP%20Central');
+}
+
 export default function TaskDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -77,11 +86,12 @@ export default function TaskDetail() {
   const [formData, setFormData] = useState({});
   const [proofLinksText, setProofLinksText] = useState('');
   const [notes, setNotes] = useState('');
-  const [adminFields, setAdminFields] = useState({ dueDate: '', status: '', rewardCents: '', penaltyLateCents: '', penaltyMissCents: '' });
+  const [adminFields, setAdminFields] = useState({ dueDate: '', status: '' });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [savingAdmin, setSavingAdmin] = useState(false);
+  const [deletingTask, setDeletingTask] = useState(false);
   const loadedRef = useRef(false);
   const dirtyRef = useRef(false);
 
@@ -89,8 +99,9 @@ export default function TaskDetail() {
     api.get(`/tasks/${id}`)
       .then(response => {
         const nextTask = response.data;
-        setTask(nextTask);
         const latestSubmission = nextTask.submissions?.[0];
+
+        setTask(nextTask);
         setFormData(
           nextTask.savedData && Object.keys(nextTask.savedData).length > 0
             ? nextTask.savedData
@@ -103,19 +114,26 @@ export default function TaskDetail() {
         setAdminFields({
           dueDate: nextTask.dueDate ? nextTask.dueDate.slice(0, 10) : '',
           status: nextTask.status || 'pending',
-          rewardCents: String(nextTask.rewardCents ?? ''),
-          penaltyLateCents: String(nextTask.penaltyLateCents ?? ''),
-          penaltyMissCents: String(nextTask.penaltyMissCents ?? ''),
         });
         loadedRef.current = true;
+        dirtyRef.current = false;
       })
-      .catch(() => navigate('/today', { replace: true }));
+      .catch(() => navigate('/dashboard', { replace: true }));
   }, [id, navigate]);
 
-  const spec = useMemo(() => getTaskFormSpec(task), [task]);
-  const requiredKeys = useMemo(() => getRequiredFieldKeys(task), [task]);
+  const descriptor = useMemo(() => getTemplateDescriptor(task), [task]);
+  const TemplateComponent = descriptor?.Component || null;
+  const spec = useMemo(() => (TemplateComponent ? null : getTaskFormSpec(task)), [task, TemplateComponent]);
+  const requiredKeys = useMemo(
+    () => descriptor?.requiredKeys || getRequiredFieldKeys(task),
+    [descriptor, task]
+  );
   const missingKeys = useMemo(
-    () => requiredKeys.filter(key => !formData?.[key]),
+    () => requiredKeys.filter(key => {
+      const value = formData?.[key];
+      if (Array.isArray(value)) return value.filter(Boolean).length === 0;
+      return !value;
+    }),
     [requiredKeys, formData]
   );
 
@@ -134,22 +152,41 @@ export default function TaskDetail() {
     setFormData(prev => ({ ...prev, [key]: value }));
   }
 
+  function updateTemplateData(nextData) {
+    dirtyRef.current = true;
+    setFormData(nextData || {});
+  }
+
   const latestSubmission = task?.submissions?.[0] || null;
+  const templateHeading = descriptor
+    ? (task.templatePrefill?.templateLabel || descriptor.key.replace(/_/g, ' '))
+    : spec.title;
 
   async function handleSubmit() {
     setSubmitting(true);
     setError('');
     setMessage('');
     try {
-      if (missingKeys.length > 0) {
+      if (!TemplateComponent && missingKeys.length > 0) {
         throw new Error(`Complete: ${missingKeys.join(', ')}`);
       }
+
+      const combinedLinks = Array.from(new Set([
+        ...collectProofLinks(formData),
+        ...proofLinksText.split('\n').map(item => item.trim()).filter(Boolean),
+      ]));
+
+      if (task?.requiresProof && combinedLinks.length === 0) {
+        throw new Error('Add at least one proof link.');
+      }
+
       await api.post('/submissions', {
         taskId: id,
         templateData: formData,
-        driveLinks: proofLinksText.split('\n').map(item => item.trim()).filter(Boolean),
+        driveLinks: combinedLinks,
         notes,
       });
+      setProofLinksText(combinedLinks.join('\n'));
       setMessage('Submitted for review.');
       const refreshed = await api.get(`/tasks/${id}`);
       setTask(refreshed.data);
@@ -168,9 +205,6 @@ export default function TaskDetail() {
       await api.patch(`/tasks/${id}`, {
         dueDate: adminFields.dueDate || null,
         status: adminFields.status,
-        rewardCents: Number(adminFields.rewardCents || 0),
-        penaltyLateCents: Number(adminFields.penaltyLateCents || 0),
-        penaltyMissCents: Number(adminFields.penaltyMissCents || 0),
       });
       const refreshed = await api.get(`/tasks/${id}`);
       setTask(refreshed.data);
@@ -182,6 +216,23 @@ export default function TaskDetail() {
     }
   }
 
+  async function handleDeleteTask() {
+    if (!canEditTask) return;
+    const confirmed = window.confirm('Delete this task?');
+    if (!confirmed) return;
+
+    setDeletingTask(true);
+    setError('');
+    setMessage('');
+    try {
+      await api.delete(`/tasks/${id}`);
+      navigate('/week', { replace: true });
+    } catch (err) {
+      setError(err.response?.data?.error || 'Delete failed.');
+      setDeletingTask(false);
+    }
+  }
+
   if (!task) {
     return (
       <div style={{ paddingTop: 'var(--space-6)' }}>
@@ -190,6 +241,8 @@ export default function TaskDetail() {
       </div>
     );
   }
+
+  const hideResourceLink = shouldHideResourceLink(task, descriptor);
 
   return (
     <div style={{ paddingTop: 'var(--space-6)' }}>
@@ -216,7 +269,7 @@ export default function TaskDetail() {
         </span>
       </div>
 
-      {(task.resourceUrl || task.templatePrefill?.assignment || task.templatePrefill?.instructions || task.templatePrefill?.checklist?.length) && (
+      {(task.templatePrefill?.assignment || task.templatePrefill?.instructions || task.templatePrefill?.checklist?.length || (!hideResourceLink && task.resourceUrl)) && (
         <div style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-4)', border: '1px solid var(--color-border)', background: 'var(--color-surface)' }}>
           <div style={{ fontSize: 'var(--text-xs)', fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-faint)', marginBottom: 'var(--space-2)' }}>
             Assignment
@@ -240,7 +293,7 @@ export default function TaskDetail() {
               ))}
             </div>
           )}
-          {task.resourceUrl && (
+          {!hideResourceLink && task.resourceUrl && (
             <a href={task.resourceUrl} target="_blank" rel="noreferrer" className="link-accent">
               {task.resourceUrl}
             </a>
@@ -253,7 +306,7 @@ export default function TaskDetail() {
           <div style={{ fontSize: 'var(--text-xs)', fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-faint)', marginBottom: 'var(--space-3)' }}>
             Admin
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 'var(--space-3)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
             <Field label="Due date">
               <input className="input-base" type="date" value={adminFields.dueDate} onChange={event => setAdminFields(prev => ({ ...prev, dueDate: event.target.value }))} />
             </Field>
@@ -264,45 +317,45 @@ export default function TaskDetail() {
                 ))}
               </select>
             </Field>
-            <Field label="Reward (cents)">
-              <input className="input-base" type="number" value={adminFields.rewardCents} onChange={event => setAdminFields(prev => ({ ...prev, rewardCents: event.target.value }))} />
-            </Field>
-            <Field label="Late penalty">
-              <input className="input-base" type="number" value={adminFields.penaltyLateCents} onChange={event => setAdminFields(prev => ({ ...prev, penaltyLateCents: event.target.value }))} />
-            </Field>
-            <Field label="Miss penalty">
-              <input className="input-base" type="number" value={adminFields.penaltyMissCents} onChange={event => setAdminFields(prev => ({ ...prev, penaltyMissCents: event.target.value }))} />
-            </Field>
           </div>
-          <button className="btn-primary btn-sm" onClick={handleAdminSave} disabled={savingAdmin}>
-            {savingAdmin ? 'Saving…' : 'Save'}
-          </button>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <button className="btn-primary btn-sm" onClick={handleAdminSave} disabled={savingAdmin}>
+              {savingAdmin ? 'Saving…' : 'Save'}
+            </button>
+            <button className="btn-outline btn-sm" onClick={handleDeleteTask} disabled={deletingTask}>
+              {deletingTask ? 'Deleting…' : 'Delete task'}
+            </button>
+          </div>
         </div>
       )}
 
       <div style={{ border: '1px solid var(--color-border)', background: 'var(--color-surface)', padding: 'var(--space-5)', marginBottom: 'var(--space-6)' }}>
         <div style={{ fontSize: 'var(--text-xs)', fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-faint)', marginBottom: 'var(--space-4)' }}>
-          {spec.title}
+          {templateHeading}
         </div>
 
-        {spec.sections.map(section => (
-          <section key={section.title} style={{ marginBottom: 'var(--space-6)' }}>
-            <div style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-2)', borderBottom: '1px solid var(--color-border)', fontSize: 'var(--text-xs)', fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-faint)' }}>
-              {section.title}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-3)' }}>
-              {section.fields.map(field => (
-                <div key={field.key} style={field.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
-                  <Field label={field.type === 'checkbox' ? 'Checklist' : field.required ? `${field.label} *` : field.label}>
-                    {renderInput(field, formData[field.key], value => updateFormValue(field.key, value))}
-                  </Field>
-                </div>
-              ))}
-            </div>
-          </section>
-        ))}
+        {TemplateComponent ? (
+          <TemplateComponent data={formData} onChange={updateTemplateData} task={task} />
+        ) : (
+          spec.sections.map(section => (
+            <section key={section.title} style={{ marginBottom: 'var(--space-6)' }}>
+              <div style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-2)', borderBottom: '1px solid var(--color-border)', fontSize: 'var(--text-xs)', fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-faint)' }}>
+                {section.title}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-3)' }}>
+                {section.fields.map(field => (
+                  <div key={field.key} style={field.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
+                    <Field label={field.type === 'checkbox' ? 'Checklist' : field.required ? `${field.label} *` : field.label}>
+                      {renderInput(field, formData[field.key], value => updateFormValue(field.key, value))}
+                    </Field>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))
+        )}
 
-        <Field label="Additional proof links">
+        <Field label="Proof Links">
           <textarea
             className="input-base"
             rows={3}
@@ -359,7 +412,7 @@ export default function TaskDetail() {
       )}
 
       {isStudent && (
-        <button className="btn-primary" onClick={handleSubmit} disabled={submitting || missingKeys.length > 0}>
+        <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
           {submitting ? 'Submitting…' : 'Submit for review'}
         </button>
       )}

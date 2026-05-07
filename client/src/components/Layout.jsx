@@ -66,8 +66,8 @@ const Sidebar = ({ dark, toggleDark }) => {
   const firstName = user?.name?.split(' ')[0] || user?.email?.split('@')[0] || '';
 
   const NAV_LINKS = [
-    { to: '/today',     icon: CheckSquare,   label: 'Today',     badge: overdueCnt > 0 ? overdueCnt : 0 },
-    { to: '/week',      icon: Calendar,      label: 'Week',      badge: 0 },
+    { to: '/dashboard', icon: CheckSquare,   label: 'Dashboard', badge: overdueCnt > 0 ? overdueCnt : 0 },
+    { to: '/week',      icon: Calendar,      label: 'All Tasks', badge: 0 },
     { to: '/analytics', icon: DollarSign,    label: 'Analytics', badge: 0 },
     { to: '/notes',     icon: MessageSquare, label: 'Notes',     badge: pendingRevCnt > 0 && (user?.role === 'admin' || user?.role === 'parent') ? pendingRevCnt : 0 },
     { to: '/trackers',  icon: BookOpen,      label: 'Trackers',  badge: 0 },
@@ -84,7 +84,6 @@ const Sidebar = ({ dark, toggleDark }) => {
         {!collapsed && (
           <div className="sidebar__wordmark">
             <span className="sidebar__prose-label">TRACKER</span>
-            <span className="sidebar__lamt-label">LAMT · UCLA</span>
           </div>
         )}
         <button onClick={handleToggle} className="sidebar__toggle"
