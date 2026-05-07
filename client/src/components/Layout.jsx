@@ -5,7 +5,7 @@ import api from '../utils/api';
 import {
   MessageSquare, LogOut, Menu, X, Moon, Sun,
   ShieldAlert, AlertTriangle, CheckSquare, DollarSign,
-  Calendar, BookOpen,
+  Calendar, BookOpen, CheckCircle,
 } from 'lucide-react';
 
 export const ThemeContext = createContext({ dark: false });
@@ -66,11 +66,12 @@ const Sidebar = ({ dark, toggleDark }) => {
   const firstName = user?.name?.split(' ')[0] || user?.email?.split('@')[0] || '';
 
   const NAV_LINKS = [
-    { to: '/dashboard', icon: CheckSquare,   label: 'Dashboard', badge: overdueCnt > 0 ? overdueCnt : 0 },
-    { to: '/week',      icon: Calendar,      label: 'All Tasks', badge: 0 },
-    { to: '/analytics', icon: DollarSign,    label: 'Analytics', badge: 0 },
-    { to: '/notes',     icon: MessageSquare, label: 'Notes',     badge: pendingRevCnt > 0 && (user?.role === 'admin' || user?.role === 'parent') ? pendingRevCnt : 0 },
-    { to: '/trackers',  icon: BookOpen,      label: 'Trackers',  badge: 0 },
+    { to: '/dashboard',  icon: CheckSquare,   label: 'Dashboard',  badge: overdueCnt > 0 ? overdueCnt : 0 },
+    { to: '/week',       icon: Calendar,      label: 'All Tasks',  badge: 0 },
+    { to: '/completed',  icon: CheckCircle,   label: 'Completed',  badge: 0 },
+    { to: '/analytics',  icon: DollarSign,    label: 'Analytics',  badge: 0 },
+    { to: '/notes',      icon: MessageSquare, label: 'Notes',      badge: pendingRevCnt > 0 && (user?.role === 'admin' || user?.role === 'parent') ? pendingRevCnt : 0 },
+    { to: '/trackers',   icon: BookOpen,      label: 'Trackers',   badge: 0 },
   ];
 
   return (

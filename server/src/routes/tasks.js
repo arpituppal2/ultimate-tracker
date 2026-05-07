@@ -17,6 +17,8 @@ const BATCH_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_PAGE_SIZE = 500;
 
+const DONE_STATUSES = ['done', 'missing', 'late'];
+
 function parsePagination(query) {
   const take = Math.min(parseInt(query.take, 10) || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
   const skip = parseInt(query.skip, 10) || 0;
@@ -144,6 +146,51 @@ router.get('/', authenticate, async (req, res) => {
     res.json({ tasks: tasks.map(normalizeTask), total, take, skip });
   } catch (error) {
     console.error('Task list error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/tasks/completed
+router.get('/completed', authenticate, async (req, res) => {
+  try {
+    const { category, q, search } = req.query;
+    const { take, skip } = parsePagination(req.query);
+    const and = [];
+
+    const categoryWhere = buildCategoryFilter(category);
+    if (Object.keys(categoryWhere).length > 0) and.push(categoryWhere);
+
+    const searchText = String(q || search || '').trim();
+    if (searchText) {
+      and.push({
+        OR: [
+          { title:        { contains: searchText, mode: 'insensitive' } },
+          { description:  { contains: searchText, mode: 'insensitive' } },
+          { category:     { contains: searchText, mode: 'insensitive' } },
+          { templateType: { contains: searchText, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    const where = {
+      status: { in: DONE_STATUSES },
+      ...(and.length > 0 ? { AND: and } : {}),
+    };
+
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        select: buildTaskSelect(),
+        orderBy: [{ updatedAt: 'desc' }, { dueDate: 'desc' }],
+        take,
+        skip,
+      }),
+      prisma.task.count({ where }),
+    ]);
+
+    res.json({ tasks: tasks.map(normalizeTask), total, take, skip });
+  } catch (error) {
+    console.error('Task completed error:', error);
     res.status(500).json({ error: error.message });
   }
 });
