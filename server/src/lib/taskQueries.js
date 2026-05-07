@@ -1,4 +1,4 @@
-const ACTIVE_TASK_STATUSES = ['pending', 'in_progress', 'late', 'needs_revision'];
+const ACTIVE_TASK_STATUSES = ['pending', 'in_progress', 'pending_review', 'late', 'needs_revision'];
 const COMPLETED_TASK_STATUSES = ['done', 'missing'];
 
 function startOfDay(date = new Date()) {

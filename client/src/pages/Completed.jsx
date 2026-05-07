@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle, ChevronDown, Search, X } from 'lucide-react';
+import api from '../utils/api';
 
 const DONE_STATUSES = ['done', 'missing', 'late'];
 
@@ -21,7 +22,6 @@ const TYPE_LABELS = {
 };
 
 function typeKey(task) {
-  // Prefer templateType, fall back to category, then 'other'
   const raw = task.templateType || task.category || 'other';
   return raw.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 }
@@ -37,7 +37,7 @@ const STATUS_LABEL = {
 };
 
 function formatDate(str) {
-  if (!str) return '—';
+  if (!str) return '\u2014';
   return new Date(str).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   });
@@ -52,13 +52,11 @@ export default function Completed() {
 
   useEffect(() => {
     setLoading(true);
-    fetch('/api/tasks/completed', { credentials: 'include' })
-      .then(r => { if (!r.ok) throw new Error('Failed to load'); return r.json(); })
-      .then(data => { setTasks(Array.isArray(data) ? data : data.tasks || []); setLoading(false); })
+    api.get('/tasks/completed')
+      .then(r => { setTasks(Array.isArray(r.data) ? r.data : r.data.tasks || []); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   }, []);
 
-  // Derive sorted type list from actual data
   const types = useMemo(() => {
     const counts = {};
     tasks.forEach(t => {
@@ -125,7 +123,7 @@ export default function Completed() {
         }} />
         <input
           type="text"
-          placeholder="Search completed tasks…"
+          placeholder="Search completed tasks\u2026"
           value={search}
           onChange={e => setSearch(e.target.value)}
           style={{
