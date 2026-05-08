@@ -103,12 +103,21 @@ function normalizeTask(task) {
   if (!task) return task;
   const today = startOfDay();
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+
+  // A task is not overdue if any submission was made on or before the due date
+  const hasOnTimeSubmission =
+    Array.isArray(task.submissions) &&
+    task.submissions.some(
+      (s) => dueDate && new Date(s.submittedAt) <= dueDate
+    );
+
   return {
     ...task,
     isOverdue:
       Boolean(dueDate) &&
       dueDate < today &&
-      ACTIVE_TASK_STATUSES.includes(task.status),
+      ACTIVE_TASK_STATUSES.includes(task.status) &&
+      !hasOnTimeSubmission,
   };
 }
 
